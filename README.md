@@ -19,7 +19,7 @@
 
 ## **Introduction**
 
-VoiceHub is a voice-activated universal ordering platform designed to simplify everyday transactions in the Gulf region. Users can speak their requests-such as ordering food, booking a ride, reserving a flight, or purchasing groceries-and the system will interpret the intent, select the appropriate service provider, authenticate seamlessly, and complete the order. The platform leverages advanced voice AI for natural interactions, integrates with regional providers via APIs, and maintains a contextual, adaptive user interface.
+XOTI is a voice-activated universal ordering platform designed to simplify everyday transactions in the Gulf region. Users can speak their requests-such as ordering food, booking a ride, reserving a flight, or purchasing groceries-and the system will interpret the intent, select the appropriate service provider, authenticate seamlessly, and complete the order. The platform leverages advanced voice AI for natural interactions, integrates with regional providers via APIs, and maintains a contextual, adaptive user interface.
 
 The core innovation lies in context-aware automation: the system identifies the service type (e.g., "Order pizza" -> food delivery) and dynamically routes to the best provider based on availability, user preferences, and location. All order history is stored centrally for pattern analysis using machine learning (ML), enabling personalized recommendations.
 
@@ -131,7 +131,7 @@ Users link accounts once; platform stores tokens or places orders on their behal
 
 **Pros**:
 
-*   Superior UX: Single VoiceHub login for all services; faster transactions.
+*   Superior UX: Single XOTI login for all services; faster transactions.
 *   Centralized control: Easier ML analytics on unified data; auto-fallback between providers.
 *   Revenue potential: Add platform fees or bundled deals.
 *   Simplified scaling: Fewer auth flows in high-traffic scenarios.
