@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>LiveKit JSON Test Client</title>
+  <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.min.js"></script>
+</head>
+<body style="font-family: sans-serif;">
+  <h2>LiveKit Agent JSON Test</h2>
+  <pre id="output">Connecting...</pre>
+
+  <script>
+    const output = document.getElementById("output");
+
+    // Replace with your actual LiveKit credentials
+    const LIVEKIT_URL = "wss://aai-voice-95an5m9s.livekit.cloud";
+    const TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjE3NjEwMzI5ODcsImlkZW50aXR5IjoiaWRlbnRpdHkta3N2OSIsImlzcyI6IkFQSTNkOWNLeFNzRVhHWSIsIm5iZiI6MTc2MTAzMjA4Nywic3ViIjoiaWRlbnRpdHkta3N2OSIsInZpZGVvIjp7ImNhblVwZGF0ZU93bk1ldGFkYXRhIjp0cnVlLCJyb29tIjoicGxheWdyb3VuZC1qUklJLXBiMTAiLCJyb29tSm9pbiI6dHJ1ZSwicm9vbUxpc3QiOnRydWV9fQ.yyg1h9rTON6bqXVHCmETUBe3_25xlzMdC-Y0mVQQ-eo"; // from your LiveKit server (JWT)
+
+    async function connectLiveKit() {
+      const room = new LivekitClient.Room();
+
+      room.on(LivekitClient.RoomEvent.DataReceived, (payload, participant, kind) => {
+        try {
+          const text = new TextDecoder().decode(payload);
+          const json = JSON.parse(text);
+          console.log("📩 JSON Data Received:", json);
+
+          output.textContent += "\n\n📦 Received:\n" + JSON.stringify(json, null, 2);
+        } catch (err) {
+          console.error("❌ Failed to parse data:", err);
+        }
+      });
+
+      room.on(LivekitClient.RoomEvent.ParticipantConnected, (p) => {
+        output.textContent += `\n👋 Participant joined: ${p.identity}`;
+      });
+
+      room.on(LivekitClient.RoomEvent.Connected, () => {
+        output.textContent += `\n✅ Connected to room: ${room.name}`;
+      });
+
+      try {
+        await room.connect(LIVEKIT_URL, TOKEN);
+        await room.localParticipant.setMicrophoneEnabled(true);
+        output.textContent += "\n🚀 Waiting for agent to send data...";
+      } catch (err) {
+        output.textContent += "\n❌ Connection failed: " + err;
+      }
+    }
+
+    connectLiveKit();
+  </script>
+</body>
+</html>
