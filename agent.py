@@ -9,11 +9,12 @@ from assistant import Assistant
 load_dotenv(".env")
 
 async def entrypoint(ctx: agents.JobContext):
-    llm = openai.LLM.with_ollama(
-        model=os.getenv("OLLAMA_MODEL", "llama3.2"),
-        base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-    )
+    # llm = openai.LLM.with_ollama(
+    #     model=os.getenv("OLLAMA_MODEL", "llama3.2"),
+    #     base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
+    # )
 
+    await ctx.connect()
     # llm = llm,
     # tts = deepgram.TTS(),
     session = AgentSession(
@@ -23,8 +24,8 @@ async def entrypoint(ctx: agents.JobContext):
         vad=silero.VAD.load(),
     )
 
-    await session.start(room=ctx.room, agent=Assistant())
-
+    assistant = Assistant(room=ctx.room.local_participant)
+    await session.start(room=ctx.room, agent=assistant)
     await session.generate_reply(
         instructions="Greet the user warmly and tell them you can help order food, book flights, or rides."
     )

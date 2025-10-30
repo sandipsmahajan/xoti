@@ -1,4 +1,7 @@
+import json
+
 from dotenv import load_dotenv
+from livekit.rtc.participant import LocalParticipant
 from livekit.agents import Agent, RunContext
 from livekit.agents.llm import function_tool
 from dataclasses import dataclass
@@ -34,7 +37,9 @@ def json_response(status: str, action: str, message: str = None, data=None):
     }
 
 class Assistant(Agent):
-    def __init__(self):
+
+    def __init__(self, room=LocalParticipant):
+        self.room = room
         super().__init__(
             instructions="You are a JSON-only assistant that connects to Supabase to fetch live data for rides, food, flights, and hotels."
         )
@@ -47,6 +52,14 @@ class Assistant(Agent):
         if not hasattr(context, "_userdata"):
             context._userdata = SessionData()
         return context._userdata
+
+    async def _publish(self, payload: dict):
+        """Send the JSON response to every participant in the room."""
+        await self.room.publish_data(
+            payload=json.dumps(payload).encode("utf-8"),
+            reliable=True
+        )
+        print(payload)
 
     # ---------------------- RIDE FLOW ----------------------
     @function_tool
@@ -81,7 +94,7 @@ class Assistant(Agent):
             for r in available_rides
         ]
 
-        return json_response(
+        res = json_response(
             "success",
             "ride_search",
             f"Rides found from {pickup} to {destination}",
@@ -92,6 +105,9 @@ class Assistant(Agent):
                 "options": rides_list,
             },
         )
+        await self._publish(res)
+        return res
+
 
     @function_tool
     async def book_ride(self, context: RunContext, ride_id: int = None, passenger_name: str = None, phone_number: str = None):
@@ -120,7 +136,9 @@ class Assistant(Agent):
             "phone": phone_number,
         }
         self.ride_bookings.append(booking)
-        return json_response("success", "ride_booking", "Ride booked successfully", booking)
+        res = json_response("success", "ride_booking", "Ride booked successfully", booking)
+        await self._publish(res)
+        return res
 
     # ---------------------- FOOD FLOW ----------------------
     @function_tool
@@ -137,7 +155,9 @@ class Assistant(Agent):
         userdata = self._get_userdata(context)
         userdata.available_food = food_items
 
-        return json_response("success", "food_search", f"{len(food_items)} food items found", {"items": food_items})
+        res = json_response("success", "food_search", f"{len(food_items)} food items found", {"items": food_items})
+        await self._publish(res)
+        return res
 
     @function_tool
     async def order_food(self, context: RunContext, food_id: int = None, customer_name: str = None, phone_number: str = None):
@@ -161,7 +181,9 @@ class Assistant(Agent):
             "image_url": food_item.get("image_url"),
         }
         self.food_orders.append(order)
-        return json_response("success", "food_order", "Food order placed successfully", order)
+        res = json_response("success", "food_order", "Food order placed successfully", order)
+        await self._publish(res)
+        return res
 
     # ---------------------- FLIGHT FLOW ----------------------
     @function_tool
@@ -180,12 +202,14 @@ class Assistant(Agent):
         userdata.available_flights = available_flights
         userdata.to_city = to_city
 
-        return json_response(
+        res = json_response(
             "success",
             "flight_search",
             f"{len(available_flights)} flights found",
             {"flights": available_flights},
         )
+        await self._publish(res)
+        return res
 
     @function_tool
     async def book_flight(self, context: RunContext, flight_id: int = None, passenger_name: str = None, phone_number: str = None):
@@ -212,7 +236,9 @@ class Assistant(Agent):
             "arrival_time": flight["arrival_time"],
         }
         self.flight_bookings.append(booking)
-        return json_response("success", "flight_booking", "Flight booked successfully", booking)
+        res = json_response("success", "flight_booking", "Flight booked successfully", booking)
+        await self._publish(res)
+        return res
 
     # ---------------------- HOTEL FLOW ----------------------
     @function_tool
@@ -230,7 +256,9 @@ class Assistant(Agent):
         userdata.available_hotels = available_hotels
         userdata.hotel_city = city
 
-        return json_response("success", "hotel_search", f"{len(available_hotels)} hotels found in {city}", {"hotels": available_hotels})
+        res = json_response("success", "hotel_search", f"{len(available_hotels)} hotels found in {city}", {"hotels": available_hotels})
+        await self._publish(res)
+        return res
 
     @function_tool
     async def book_hotel(self, context: RunContext, hotel_id: int = None, guest_name: str = None, phone_number: str = None, rooms: int = 1):
@@ -255,4 +283,7 @@ class Assistant(Agent):
             "total_price": float(hotel["price_per_night"]) * rooms,
         }
         self.hotel_bookings.append(booking)
-        return json_response("success", "hotel_booking", "Hotel booked successfully", booking)
+        res = json_response("success", "hotel_booking", "Hotel booked successfully", booking)
+        await self._publish(res)
+        return res
+
