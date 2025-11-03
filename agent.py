@@ -24,10 +24,12 @@ async def entrypoint(ctx: agents.JobContext):
         vad=silero.VAD.load(),
     )
 
-    assistant = Assistant(room=ctx.room.local_participant)
+    session.userdata = {}
+
+    assistant = Assistant(participant=ctx.room.local_participant)
     await session.start(room=ctx.room, agent=assistant)
     await session.generate_reply(
-        instructions="Greet the user warmly and tell them you can help order food, book flights, or rides."
+        instructions="Greet the user warmly and tell them you can help book flights, order a food, book hotel, or book a rides."
     )
 
 

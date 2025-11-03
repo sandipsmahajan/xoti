@@ -1,3 +1,4 @@
+dateparser
 livekit-agents[openai,deepgram,silero,ollama]
 python-dotenv
 httpx

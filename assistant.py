@@ -1,19 +1,19 @@
 import json
+import uuid
+from typing import List, Dict, TypedDict, Annotated
 
-from dotenv import load_dotenv
+import dateparser
 from livekit.rtc.participant import LocalParticipant
 from livekit.agents import Agent, RunContext
 from livekit.agents.llm import function_tool
 from dataclasses import dataclass
 from supabase import create_client, Client
 import os
-import random
 
-load_dotenv(".env")
-
-# Load environment variables
-SUPABASE_URL = 'https://lhfdogoefrwtnhdtibsh.supabase.co' # os.getenv("SUPABASE_URL")
-SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxoZmRvZ29lZnJ3dG5oZHRpYnNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA0NTIxNzgsImV4cCI6MjA3NjAyODE3OH0.mIpn-FbyvbobjxzF_Zb5nL2yPAa61Ke3Ed78LZC5pQ0' # os.getenv("SUPABASE_KEY")
+# SUPABASE_URL = os.getenv("SUPABASE_URL")
+# SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxoZmRvZ29lZnJ3dG5oZHRpYnNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA0NTIxNzgsImV4cCI6MjA3NjAyODE3OH0.mIpn-FbyvbobjxzF_Zb5nL2yPAa61Ke3Ed78LZC5pQ0"
+SUPABASE_URL="https://lhfdogoefrwtnhdtibsh.supabase.co"
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 @dataclass
@@ -23,10 +23,26 @@ class SessionData:
     ride_type: str | None = None
     distance_km: int | None = None
     available_food: list | None = None
+    from_city: str | None = None
     to_city: str | None = None
     available_flights: list | None = None
     hotel_city: str | None = None
     available_hotels: list | None = None
+    passengers: list | None = None
+    selected_flight: dict | None = None
+    flight_class: str | None = None
+    trip_type: str | None = None
+    departure_date: str | None = None
+    return_date: str | None = None
+    payment_confirmed: bool = False
+    passenger_details: List[Dict] | None = None
+    payment_summary: dict | None = None
+
+class PassengerDetail(TypedDict):
+    name: str
+    age: int
+    type: str  # "adult" or "kid"
+    passport_number: str | None  # optional
 
 def json_response(status: str, action: str, message: str = None, data=None):
     return {
@@ -36,254 +52,430 @@ def json_response(status: str, action: str, message: str = None, data=None):
         "data": data,
     }
 
+
+def _get_userdata(context: RunContext) -> SessionData:
+    if "userdata" not in context.session.userdata:
+        print("Userdata not found, using default values")
+        context.session.userdata["userdata"] = SessionData()
+        context.session.userdata["userdata"].passengers = [{"type": "adult", "count": 0}, {"type": "kid", "count": -1}]
+    return context.session.userdata["userdata"]
+
+
 class Assistant(Agent):
 
-    def __init__(self, room=LocalParticipant):
-        self.room = room
+    def __init__(self, participant=LocalParticipant):
+        self.participant = participant
         super().__init__(
-            instructions="You are a JSON-only assistant that connects to Supabase to fetch live data for rides, food, flights, and hotels."
+            instructions="""
+                You are a JSON-only assistant for booking flights, hotels, rides, and food.
+
+                1. ALWAYS use `collect_flight_info` to gather required fields one by one.
+                2. When all fields are collected, call `search_flights`.
+                3. After a successful search, **read the option list aloud** and ask the user for the **option number**.
+                4. Use `select_flight_by_option` with that number – **never** ask for a raw DB id.
+                5. Continue with `add_passenger_details` → `confirm_booking`.
+                
+                Required fields for a flight search:
+                - from_city
+                - to_city
+                - departure_date
+                - flight_class
+                - adults
+                - kids
+
+                Use natural language to ask for missing info. 
+                """
         )
         self.ride_bookings = []
         self.food_orders = []
         self.flight_bookings = []
         self.hotel_bookings = []
 
-    def _get_userdata(self, context: RunContext) -> SessionData:
-        if not hasattr(context, "_userdata"):
-            context._userdata = SessionData()
-        return context._userdata
-
     async def _publish(self, payload: dict):
-        """Send the JSON response to every participant in the room."""
-        await self.room.publish_data(
+        await self.participant.publish_data(
             payload=json.dumps(payload).encode("utf-8"),
             reliable=True
         )
         print(payload)
 
-    # ---------------------- RIDE FLOW ----------------------
-    @function_tool
-    async def search_rides(self, context: RunContext, pickup: str = None, destination: str = None, ride_type: str = None):
-        if not pickup or not destination or not ride_type:
-            missing = [f for f in ["pickup", "destination", "ride_type"] if locals()[f] is None]
-            return json_response("error", "ride_search", f"Missing fields: {', '.join(missing)}")
+    @function_tool()
+    async def collect_flight_info(
+            self,
+            context: RunContext,
+            from_city: str = None,
+            to_city: str | None = None,
+            departure_date: str | None = None,
+            flight_class: str | None = None,
+            adults: int | None = None,
+            kids: int | None = None,
+            trip_type: str | None = None,
+            return_date: str | None = None
+    ):
+        """
+        Collect flight booking details.
+        Never say 'No' or 'Null' for missing fields —
+        just ask the next required question naturally.
+        """
+        userdata = _get_userdata(context)
 
-        # Query Supabase
-        response = supabase.table("rides").select("*").eq("type", ride_type).execute()
-        available_rides = response.data
+        if from_city:
+            userdata.from_city = from_city.strip()
+        if to_city:
+            userdata.to_city = to_city.strip()
+        if departure_date:
+            parsed_dep = dateparser.parse(departure_date)
+            if not parsed_dep:
+                return await self._publish(json_response(
+                    "error", "flight_search",
+                    "Couldn't understand the departure date. Can you repeat it clearly?"
+                ))
+            userdata.departure_date = parsed_dep.strftime("%Y-%m-%d")
+        if return_date:
+            parsed_ret = dateparser.parse(return_date)
+            if not parsed_ret:
+                return await self._publish(json_response(
+                    "error", "flight_search",
+                    "Couldn't understand the return date. Please say it clearly."
+                ))
+            userdata.return_date = parsed_ret.strftime("%Y-%m-%d")
 
-        if not available_rides:
-            return json_response("error", "ride_search", f"No {ride_type} rides available")
+        if flight_class:
+            userdata.flight_class = flight_class.lower().strip()
+        if adults is not None:
+            userdata.passengers = userdata.passengers or []
+            adult_entry = next((p for p in userdata.passengers if p["type"] == "adult"), None)
+            if adult_entry:
+                adult_entry["count"] = max(1, adults)
+            else:
+                userdata.passengers.append({"type": "adult", "count": max(1, adults)})
+        if kids is not None:
+            userdata.passengers = userdata.passengers or []
+            kid_entry = next((p for p in userdata.passengers if p["type"] == "kid"), None)
+            if kid_entry:
+                kid_entry["count"] = max(0, kids)
+            else:
+                userdata.passengers.append({"type": "kid", "count": max(0, kids)})
+        if trip_type:
+            userdata.trip_type = trip_type.lower()
 
-        userdata = self._get_userdata(context)
-        userdata.pickup, userdata.destination, userdata.ride_type = pickup, destination, ride_type
-        userdata.distance_km = random.randint(5, 20)
-
-        rides_list = [
-            {
-                "id": r["id"],
-                "service": r["service"],
-                "type": r["type"],
-                "currency": r["currency"],
-                "base_fare": float(r["base_fare"]),
-                "per_km": float(r["per_km"]),
-                "estimated_fare": float(r["base_fare"]) + float(r["per_km"]) * userdata.distance_km,
-                "city": r["city"],
-                "description": r["description"],
-            }
-            for r in available_rides
+        required_fields = [
+            "from_city", "to_city", "departure_date",
+            "flight_class", "adults", "kids", "trip_type"
         ]
-
-        res = json_response(
-            "success",
-            "ride_search",
-            f"Rides found from {pickup} to {destination}",
-            {
-                "pickup": pickup,
-                "destination": destination,
-                "distance_km": userdata.distance_km,
-                "options": rides_list,
-            },
-        )
-        await self._publish(res)
-        return res
-
-
-    @function_tool
-    async def book_ride(self, context: RunContext, ride_id: int = None, passenger_name: str = None, phone_number: str = None):
-        if not ride_id or not passenger_name or not phone_number:
-            missing = [f for f in ["ride_id", "passenger_name", "phone_number"] if locals()[f] is None]
-            return json_response("error", "ride_booking", f"Missing fields: {', '.join(missing)}")
-
-        response = supabase.table("rides").select("*").eq("id", ride_id).single().execute()
-        ride = response.data
-        if not ride:
-            return json_response("error", "ride_booking", f"Ride ID {ride_id} not found")
-
-        userdata = self._get_userdata(context)
-        distance_km = userdata.distance_km or random.randint(5, 20)
-        total_fare = float(ride["base_fare"]) + float(ride["per_km"]) * distance_km
-
-        booking = {
-            "booking_id": f"RD{len(self.ride_bookings) + 3001}",
-            "type": ride["type"],
-            "pickup": userdata.pickup,
-            "destination": userdata.destination,
-            "distance_km": distance_km,
-            "fare": total_fare,
-            "currency": ride["currency"],
-            "passenger": passenger_name,
-            "phone": phone_number,
+        field_prompts = {
+            "from_city": "Where are you flying from?",
+            "to_city": "What’s your destination?",
+            "departure_date": "When do you plan to depart?",
+            "flight_class": "Which class would you like to travel in — economy, premium economy, or business?",
+            "adults": "How many adults are flying?",
+            "kids": "How many kids are flying?",
+            "trip_type": "Is this a one-way trip or a round trip?"
         }
-        self.ride_bookings.append(booking)
-        res = json_response("success", "ride_booking", "Ride booked successfully", booking)
+
+        # --- dynamic check: round trip needs return_date ---
+        if getattr(userdata, "trip_type", None) == "round trip" and not userdata.return_date:
+            res = json_response(
+                "partial",
+                "collect_flight_info",
+                "What’s your return date?",
+                {"missing_field": "return_date"}
+            )
+            return res
+
+        # --- check all required fields one by one ---
+        for field in required_fields:
+            value = None
+            print(f"Required Field Check: {field}")
+            if field == "adults":
+                value = next((p["count"] for p in userdata.passengers if p["type"] == "adult"), None)
+                if value is None or value < 1:
+                    next_question = field_prompts[field]
+                    res = json_response("partial", "collect_flight_info", next_question, {"missing_field": field})
+                    return res
+                continue
+
+            elif field == "kids":
+                value = next((p["count"] for p in userdata.passengers if p["type"] == "kid"), None)
+                # ⚡ If kids == 0, accept it as valid
+                if value is None or value < 0:
+                    next_question = field_prompts[field]
+                    res = json_response("partial", "collect_flight_info", next_question, {"missing_field": field})
+                    return res
+                continue
+
+            else:
+                value = getattr(userdata, field, None)
+                # For strings, check for missing/empty
+                if value is None or (isinstance(value, str) and not value.strip()):
+                    next_question = field_prompts[field]
+                    res = json_response("partial", "collect_flight_info", next_question, {"missing_field": field})
+                    return res
+
+        res = json_response("success",
+                            "searchForm",
+                            "",
+                            {
+                                "from_city": userdata.from_city,
+                                "to_city": userdata.to_city,
+                                "departure_date": userdata.departure_date,
+                                "flight_class": userdata.flight_class,
+                                "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
+                                "kids": next((p["count"] for p in userdata.passengers if p["type"] == "kid"), 0),
+                                "trip_type": userdata.trip_type,
+                                "return_date": userdata.return_date
+                            })
         await self._publish(res)
         return res
 
-    # ---------------------- FOOD FLOW ----------------------
-    @function_tool
-    async def search_food(self, context: RunContext, cuisine: str = None):
-        query = supabase.table("food_items").select("*")
-        if cuisine:
-            query = query.ilike("name", f"%{cuisine}%")
-        response = query.execute()
-        food_items = response.data
 
-        if not food_items:
-            return json_response("error", "food_search", f"No items found for '{cuisine}'")
+    @function_tool()
+    async def search_flights(
+            self,
+            context: RunContext,
+            from_city: str,
+            to_city: str,
+            departure_date: str,
+            flight_class: str,
+            adults: int = 1,
+            kids: int = 0,
+            trip_type: str = "one way",
+            return_date: str | None = None
+    ):
+        missing_fields = []
+        for field, val in {"from_city": from_city, "to_city": to_city, "departure_date": departure_date,
+                           "flight_class": flight_class}.items():
+            if not val:
+                missing_fields.append(field)
+        if missing_fields:
+            return json_response("error", "flight_search", f"Missing fields: {', '.join(missing_fields)}")
+        # Parse natural language dates
+        parsed_dep = dateparser.parse(departure_date)
+        if not parsed_dep:
+            return await self._publish({
+                "status": "error",
+                "action": "flight_search",
+                "message": "Could not understand the departure date. Please say the date clearly."
+            })
+        departure_date_str = parsed_dep.strftime("%Y-%m-%d")
 
-        userdata = self._get_userdata(context)
-        userdata.available_food = food_items
+        if return_date:
+            parsed_ret = dateparser.parse(return_date)
+            if not parsed_ret:
+                return await self._publish({
+                    "status": "error",
+                    "action": "flight_search",
+                    "message": "Could not understand the return date. Please say the date clearly."
+                })
+            return_date_str = parsed_ret.strftime("%Y-%m-%d")
+        else:
+            return_date_str = None
 
-        res = json_response("success", "food_search", f"{len(food_items)} food items found", {"items": food_items})
-        await self._publish(res)
-        return res
+        # Validate adults and kids counts
+        if not isinstance(adults, int) or adults < 1:
+            return await self._publish({
+                "status": "error",
+                "action": "flight_search",
+                "message": "Please specify the number of adult passengers as a positive number."
+            })
 
-    @function_tool
-    async def order_food(self, context: RunContext, food_id: int = None, customer_name: str = None, phone_number: str = None):
-        if not food_id or not customer_name or not phone_number:
-            missing = [f for f in ["food_id", "customer_name", "phone_number"] if locals()[f] is None]
-            return json_response("error", "food_order", f"Missing fields: {', '.join(missing)}")
+        if not isinstance(kids, int) or kids < 0:
+            kids = 0  # default 0 if invalid or unrecognized
 
-        response = supabase.table("food_items").select("*").eq("id", food_id).single().execute()
-        food_item = response.data
-        if not food_item:
-            return json_response("error", "food_order", f"Food ID {food_id} not found")
-
-        order = {
-            "order_id": f"FO{len(self.food_orders) + 1001}",
-            "customer": customer_name,
-            "phone": phone_number,
-            "item": food_item["name"],
-            "price": float(food_item["price"]),
-            "currency": food_item["currency"],
-            "restaurant": food_item.get("country", "Unknown"),
-            "image_url": food_item.get("image_url"),
-        }
-        self.food_orders.append(order)
-        res = json_response("success", "food_order", "Food order placed successfully", order)
-        await self._publish(res)
-        return res
-
-    # ---------------------- FLIGHT FLOW ----------------------
-    @function_tool
-    async def search_flights(self, context: RunContext, from_city: str = None, to_city: str = None):
-        if not from_city or not to_city:
-            missing = [f for f in ["from_city", "to_city"] if locals()[f] is None]
-            return json_response("error", "flight_search", f"Missing fields: {', '.join(missing)}")
-
-        response = supabase.table("flights").select("*").eq("from_city", from_city).eq("to_city", to_city).execute()
-        available_flights = response.data
+        # Now proceed to query flights from your DB with from_city, to_city, departure_date_str, flight_class...
+        response = supabase.table("flights").select("*").ilike("from_city", from_city).ilike("to_city", to_city).execute()
+        available_flights = response.data or []
 
         if not available_flights:
-            return json_response("error", "flight_search", f"No flights found from {from_city} to {to_city}")
+            return await self._publish({
+                "status": "error",
+                "action": "flight_search",
+                "message": f"No flights found from {from_city} to {to_city} on {departure_date_str}."
+            })
 
-        userdata = self._get_userdata(context)
+        # Save session state for later steps if needed
+        userdata = _get_userdata(context)
         userdata.available_flights = available_flights
+        userdata.flight_class = flight_class
+        userdata.trip_type = trip_type
+        userdata.departure_date = departure_date_str
+        userdata.return_date = return_date_str
+        userdata.from_city = from_city
         userdata.to_city = to_city
+        userdata.passengers = [{"type": "adult", "count": adults}, {"type": "kid", "count": kids}]
 
+        # Publish success response with flights and passenger info
+        res = json_response("success",
+                            "searchResults",
+                            f"Found {len(available_flights)} flights from {from_city} to {to_city} on {departure_date_str}.",
+                            {
+                                "from_city": from_city,
+                                "to_city": to_city,
+                                "departure_date": departure_date_str,
+                                "return_date": return_date_str,
+                                "available_flights": available_flights,
+                                "passengers": userdata.passengers,
+                                "trip_type": trip_type
+                            })
+
+        await self._publish(res)
+        return res
+
+    @function_tool()
+    async def select_flight_by_option(
+            self,
+            context: RunContext,
+            option: int  # 1-based index the user says
+    ) -> dict:
+        """
+        Select a flight using the human-readable option number shown after a search.
+        User says "option 3" → option=3 → selects flights[2]
+        """
+        if not option or not isinstance(option, int) or option < 1:
+            return json_response("error", "flight_selection", "Please say a valid option number (e.g., 1, 2, 3).")
+
+        print("Selected flight: {}".format(option))
+        userdata = _get_userdata(context)
+        print(userdata)
+        if not userdata.available_flights:
+            return json_response("error", "flight_selection", "No flight list available. Search again first.")
+
+        # Map option → DB record
+        try:
+            flight_record: dict = userdata.available_flights[option - 1]
+            print(flight_record)
+        except IndexError:
+            return json_response("error", "flight_selection",
+                                 f"Option {option} does not exist. Choose from 1-{len(userdata.available_flights)}.")
+
+        userdata.selected_flight = flight_record
+
+        total_passengers = sum(p["count"] for p in userdata.passengers)
+        msg = (
+            f"Selected: {flight_record['airline']} "
+            f"{flight_record['departure_time']} → {flight_record['arrival_time']} "
+            f"on {flight_record['flight_date']}. "
+            f"Please give passenger details for {total_passengers} traveler(s)."
+        )
+        print(msg)
         res = json_response(
             "success",
-            "flight_search",
-            f"{len(available_flights)} flights found",
-            {"flights": available_flights},
+            "flightDetails",
+            msg,
+            {"selected_flight": flight_record, "passenger_count": total_passengers}
         )
         await self._publish(res)
         return res
 
-    @function_tool
-    async def book_flight(self, context: RunContext, flight_id: int = None, passenger_name: str = None, phone_number: str = None):
-        if not flight_id or not passenger_name or not phone_number:
-            missing = [f for f in ["flight_id", "passenger_name", "phone_number"] if locals()[f] is None]
-            return json_response("error", "flight_booking", f"Missing fields: {', '.join(missing)}")
+    @function_tool()
+    async def add_passenger_details(
+            self,
+            context: RunContext,
+            passenger_details: Annotated[
+                List[PassengerDetail],
+                {
+                    "description": "Array of passenger details",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "description": "Full name"},
+                            "age": {"type": "integer", "description": "Age in years"},
+                            "type": {"type": "string", "enum": ["adult", "kid"], "description": "Passenger type"},
+                            "passport_number": {"type": ["string", "null"], "description": "Optional passport"}
+                        },
+                        "required": ["name", "age", "type"],
+                        "additionalProperties": False
+                    }
+                }
+            ]
+    ):
+        if not passenger_details or not isinstance(passenger_details, list):
+            return json_response("error", "passenger_details",
+                                 "Missing or invalid passenger_details. Provide a list of passenger info.")
 
-        response = supabase.table("flights").select("*").eq("id", flight_id).single().execute()
-        flight = response.data
-        if not flight:
-            return json_response("error", "flight_booking", f"Flight ID {flight_id} not found")
+        userdata = _get_userdata(context)
+        expected_count = sum(p["count"] for p in userdata.passengers)
 
-        booking = {
-            "booking_id": f"FL{len(self.flight_bookings) + 1001}",
-            "passenger": passenger_name,
-            "phone": phone_number,
-            "airline": flight["airline"],
-            "from_city": flight["from_city"],
-            "to_city": flight["to_city"],
-            "price": float(flight["price"]),
-            "currency": flight["currency"],
-            "flight_date": flight["flight_date"],
-            "departure_time": flight["departure_time"],
-            "arrival_time": flight["arrival_time"],
+        if len(passenger_details) != expected_count:
+            return json_response("error", "passenger_details",
+                                 f"Passenger details count {len(passenger_details)} does not match expected {expected_count}.")
+
+        userdata.passenger_details = passenger_details
+
+        # Don’t calculate or publish payment summary here
+        message = f"Passenger details received for {expected_count} travelers. Would you like to review the payment summary?"
+        res = json_response("success", "passengerForm", message, {"passenger_details": passenger_details})
+        await self._publish(res)
+        return res
+
+    @function_tool()
+    async def show_payment_summary(self, context: RunContext):
+        """
+        Display the payment summary before confirming the booking.
+        Called after passenger details are added.
+        """
+        userdata = _get_userdata(context)
+
+        if not userdata.selected_flight or not userdata.passenger_details:
+            return json_response("error", "payment_summary",
+                                 "Missing flight or passenger details. Please complete those first.")
+
+        expected_count = sum(p["count"] for p in userdata.passengers)
+        total_price = float(userdata.selected_flight["price"]) * expected_count
+        payment_summary = {
+            "flight": userdata.selected_flight,
+            "passengers": userdata.passenger_details,
+            "class": userdata.flight_class,
+            "trip_type": userdata.trip_type,
+            "total_price": total_price,
+            "currency": userdata.selected_flight["currency"]
         }
-        self.flight_bookings.append(booking)
-        res = json_response("success", "flight_booking", "Flight booked successfully", booking)
+
+        userdata.payment_summary = payment_summary
+
+        message = (
+            f"Here’s your payment summary: {expected_count} passenger(s), "
+            f"{userdata.flight_class.capitalize()} class, total {total_price} {userdata.selected_flight['currency']}. "
+            f"Would you like to confirm this booking?"
+        )
+
+        res = json_response("success", "paymentSummary", message, {"payment_summary": payment_summary})
         await self._publish(res)
         return res
 
-    # ---------------------- HOTEL FLOW ----------------------
-    @function_tool
-    async def search_hotels(self, context: RunContext, city: str = None, check_in: str = None, check_out: str = None):
-        if not city:
-            return json_response("error", "hotel_search", "Missing field: city")
+    @function_tool()
+    async def confirm_booking(self, context: RunContext, confirm: bool = False):
+        if not confirm:
+            return json_response("error", "booking_confirmation", "Booking not confirmed. Process aborted.")
 
-        response = supabase.table("hotels").select("*").eq("city", city).execute()
-        available_hotels = response.data
-
-        if not available_hotels:
-            return json_response("error", "hotel_search", f"No hotels found in {city}")
-
-        userdata = self._get_userdata(context)
-        userdata.available_hotels = available_hotels
-        userdata.hotel_city = city
-
-        res = json_response("success", "hotel_search", f"{len(available_hotels)} hotels found in {city}", {"hotels": available_hotels})
-        await self._publish(res)
-        return res
-
-    @function_tool
-    async def book_hotel(self, context: RunContext, hotel_id: int = None, guest_name: str = None, phone_number: str = None, rooms: int = 1):
-        if not hotel_id or not guest_name or not phone_number:
-            missing = [f for f in ["hotel_id", "guest_name", "phone_number"] if locals()[f] is None]
-            return json_response("error", "hotel_booking", f"Missing fields: {', '.join(missing)}")
-
-        response = supabase.table("hotels").select("*").eq("id", hotel_id).single().execute()
-        hotel = response.data
-        if not hotel:
-            return json_response("error", "hotel_booking", f"Hotel ID {hotel_id} not found")
-
-        booking = {
-            "booking_id": f"HT{len(self.hotel_bookings) + 1001}",
-            "guest": guest_name,
-            "phone": phone_number,
-            "hotel": hotel["name"],
-            "city": hotel["city"],
-            "rooms": rooms,
-            "price_per_night": float(hotel["price_per_night"]),
-            "currency": hotel["currency"],
-            "total_price": float(hotel["price_per_night"]) * rooms,
+        userdata = _get_userdata(context)
+        print(self.participant)
+        booking_data = {
+            "booking_type": "flight",
+            "user_id": str(uuid.uuid4()),
+            "item_id": userdata.selected_flight["id"],
+            "booking_details": json.dumps({
+                "flight": userdata.selected_flight,
+                "passengers": userdata.passenger_details,
+                "class": userdata.flight_class,
+                "trip_type": userdata.trip_type,
+                "departure_date": userdata.departure_date,
+                "return_date": userdata.return_date,
+            }),
+            "payment_status": "confirmed",
+            "total_price": userdata.payment_summary["total_price"],
+            "currency": userdata.selected_flight["currency"],
+            "booking_date": "now()",
+            "start_date": userdata.departure_date,
+            "end_date": userdata.return_date if userdata.trip_type == "round-trip" else None,
         }
-        self.hotel_bookings.append(booking)
-        res = json_response("success", "hotel_booking", "Hotel booked successfully", booking)
+
+        result = supabase.table("bookings").insert(booking_data).execute()
+        print(result)
+        if not result.data:
+            return json_response("error", "booking_save", f"Failed to save booking.")
+
+        booking_id = result.data[0]["booking_id"] if result.data else "N/A"
+        userdata.payment_confirmed = True
+        res = json_response("success", "confirmation", f"Booking confirmed with booking ID {booking_id}. Thank you!")
         await self._publish(res)
         return res
-
