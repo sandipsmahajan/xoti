@@ -577,9 +577,10 @@ class Assistant(Agent):
                             "name": {"type": "string", "description": "Full name"},
                             "age": {"type": "integer", "description": "Age in years"},
                             "type": {"type": "string", "enum": ["adult", "kid"], "description": "Passenger type"},
+                            "mobile": {"type": "string", "description": "Mobile number"},
                             "passport_number": {"type": ["string", "null"], "description": "Optional passport"}
                         },
-                        "required": ["name", "age", "type"],
+                        "required": ["name", "age", "type", "mobile"],
                         "additionalProperties": False
                     }
                 }
