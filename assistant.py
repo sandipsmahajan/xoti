@@ -25,6 +25,8 @@ class SessionData:
     available_food: list | None = None
     from_city: str | None = None
     to_city: str | None = None
+    from_city_code: str | None = None
+    to_city_code: str | None = None
     available_flights: list | None = None
     hotel_city: str | None = None
     available_hotels: list | None = None
@@ -98,6 +100,47 @@ class Assistant(Agent):
         )
         print(payload)
 
+    async def fetch_city_code(self, city_name: str, field: str):
+        """
+        Generic helper to fetch city code from Supabase flights table.
+        field = 'from_city' or 'to_city'
+        Returns tuple: (canonical_city_name, city_code)
+        or None if not found.
+        """
+        if not city_name:
+            return None
+
+        city_name = city_name.strip().lower()
+
+        # Query both columns, but prioritize whichever field was specified
+        response = supabase.table("flights") \
+            .select("from_city, from_city_code, to_city, to_city_code") \
+            .or_(f"from_city.ilike.%{city_name}%,to_city.ilike.%{city_name}%") \
+            .limit(1) \
+            .execute()
+
+        if not response.data or len(response.data) == 0:
+            return None
+
+        record = response.data[0]
+
+        # If the field we expect matches, return that directly
+        if field == "from_city":
+            if record["from_city"].lower() == city_name:
+                return record["from_city"], record["from_city_code"]
+            elif record["to_city"].lower() == city_name:
+                # fallback if user used a destination city as departure
+                return record["to_city"], record["to_city_code"]
+
+        elif field == "to_city":
+            if record["to_city"].lower() == city_name:
+                return record["to_city"], record["to_city_code"]
+            elif record["from_city"].lower() == city_name:
+                # fallback if user swapped direction
+                return record["from_city"], record["from_city_code"]
+
+        return None
+
     @function_tool()
     async def collect_flight_info(
             self,
@@ -121,11 +164,26 @@ class Assistant(Agent):
         # --- progressively capture and publish after each field ---
         if from_city:
             userdata.from_city = from_city.strip()
+            city_result = await self.fetch_city_code(userdata.from_city, field="from_city")
+
+            if not city_result:
+                # Ask user to re-enter city name
+                res = json_response(
+                    "partial", 1,
+                    f"I couldn’t find any flights from '{userdata.from_city}'. Can you recheck the city name?",
+                    {"missing_field": "from_city"}
+                )
+                return res
+
+            canonical_name, city_code = city_result
+            userdata.from_city_code = city_code
             await self._publish(json_response(
                 "partial", 1, "Got it! Flying from recorded.",
                 {
                     "from_city": userdata.from_city,
                     "to_city": userdata.to_city,
+                    "from_city_code": userdata.from_city_code,
+                    "to_city_code": userdata.to_city_code,
                     "departure_date": userdata.departure_date,
                     "flight_class": userdata.flight_class,
                     "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
@@ -137,11 +195,26 @@ class Assistant(Agent):
 
         if to_city:
             userdata.to_city = to_city.strip()
+            city_result = await self.fetch_city_code(userdata.to_city, field="to_city")
+
+            if not city_result:
+                res = json_response(
+                    "partial", 1,
+                    f"Couldn’t find any flights to '{userdata.to_city}'. Please confirm or spell it differently.",
+                    {"missing_field": "to_city"}
+                )
+                return res
+
+            canonical_name, city_code = city_result
+            userdata.to_city = canonical_name
+            userdata.to_city_code = city_code
             await self._publish(json_response(
                 "partial", 1, "Destination noted.",
                 {
                     "from_city": userdata.from_city,
                     "to_city": userdata.to_city,
+                    "from_city_code": userdata.from_city_code,
+                    "to_city_code": userdata.to_city_code,
                     "departure_date": userdata.departure_date,
                     "flight_class": userdata.flight_class,
                     "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
@@ -164,6 +237,8 @@ class Assistant(Agent):
                 {
                     "from_city": userdata.from_city,
                     "to_city": userdata.to_city,
+                    "from_city_code": userdata.from_city_code,
+                    "to_city_code": userdata.to_city_code,
                     "departure_date": userdata.departure_date,
                     "flight_class": userdata.flight_class,
                     "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
@@ -186,6 +261,8 @@ class Assistant(Agent):
                 {
                     "from_city": userdata.from_city,
                     "to_city": userdata.to_city,
+                    "from_city_code": userdata.from_city_code,
+                    "to_city_code": userdata.to_city_code,
                     "departure_date": userdata.departure_date,
                     "flight_class": userdata.flight_class,
                     "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
@@ -202,6 +279,8 @@ class Assistant(Agent):
                 {
                     "from_city": userdata.from_city,
                     "to_city": userdata.to_city,
+                    "from_city_code": userdata.from_city_code,
+                    "to_city_code": userdata.to_city_code,
                     "departure_date": userdata.departure_date,
                     "flight_class": userdata.flight_class,
                     "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
@@ -223,6 +302,8 @@ class Assistant(Agent):
                 {
                     "from_city": userdata.from_city,
                     "to_city": userdata.to_city,
+                    "from_city_code": userdata.from_city_code,
+                    "to_city_code": userdata.to_city_code,
                     "departure_date": userdata.departure_date,
                     "flight_class": userdata.flight_class,
                     "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
@@ -244,6 +325,8 @@ class Assistant(Agent):
                 {
                     "from_city": userdata.from_city,
                     "to_city": userdata.to_city,
+                    "from_city_code": userdata.from_city_code,
+                    "to_city_code": userdata.to_city_code,
                     "departure_date": userdata.departure_date,
                     "flight_class": userdata.flight_class,
                     "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
@@ -260,6 +343,8 @@ class Assistant(Agent):
                 {
                     "from_city": userdata.from_city,
                     "to_city": userdata.to_city,
+                    "from_city_code": userdata.from_city_code,
+                    "to_city_code": userdata.to_city_code,
                     "departure_date": userdata.departure_date,
                     "flight_class": userdata.flight_class,
                     "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
@@ -328,6 +413,8 @@ class Assistant(Agent):
                             {
                                 "from_city": userdata.from_city,
                                 "to_city": userdata.to_city,
+                                "from_city_code": userdata.from_city_code,
+                                "to_city_code": userdata.to_city_code,
                                 "departure_date": userdata.departure_date,
                                 "flight_class": userdata.flight_class,
                                 "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
@@ -337,7 +424,6 @@ class Assistant(Agent):
                             })
         await self._publish(res)
         return res
-
 
     @function_tool()
     async def search_flights(
