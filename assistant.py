@@ -44,7 +44,7 @@ class PassengerDetail(TypedDict):
     type: str  # "adult" or "kid"
     passport_number: str | None  # optional
 
-def json_response(status: str, action: str, message: str = None, data=None):
+def json_response(status: str, action: int, message: str = None, data=None):
     return {
         "status": status,
         "action": action,
@@ -118,29 +118,99 @@ class Assistant(Agent):
         """
         userdata = _get_userdata(context)
 
+        # --- progressively capture and publish after each field ---
         if from_city:
             userdata.from_city = from_city.strip()
+            await self._publish(json_response(
+                "partial", 1, "Got it! Flying from recorded.",
+                {
+                    "from_city": userdata.from_city,
+                    "to_city": userdata.to_city,
+                    "departure_date": userdata.departure_date,
+                    "flight_class": userdata.flight_class,
+                    "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
+                    "kids": next((p["count"] for p in userdata.passengers if p["type"] == "kid"), 0),
+                    "trip_type": userdata.trip_type,
+                    "return_date": userdata.return_date
+                }
+            ))
+
         if to_city:
             userdata.to_city = to_city.strip()
+            await self._publish(json_response(
+                "partial", 1, "Destination noted.",
+                {
+                    "from_city": userdata.from_city,
+                    "to_city": userdata.to_city,
+                    "departure_date": userdata.departure_date,
+                    "flight_class": userdata.flight_class,
+                    "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
+                    "kids": next((p["count"] for p in userdata.passengers if p["type"] == "kid"), 0),
+                    "trip_type": userdata.trip_type,
+                    "return_date": userdata.return_date
+                }
+            ))
+
         if departure_date:
             parsed_dep = dateparser.parse(departure_date)
             if not parsed_dep:
                 return await self._publish(json_response(
-                    "error", "flight_search",
+                    "error", 1,
                     "Couldn't understand the departure date. Can you repeat it clearly?"
                 ))
             userdata.departure_date = parsed_dep.strftime("%Y-%m-%d")
+            await self._publish(json_response(
+                "partial", 1, "Departure date locked in.",
+                {
+                    "from_city": userdata.from_city,
+                    "to_city": userdata.to_city,
+                    "departure_date": userdata.departure_date,
+                    "flight_class": userdata.flight_class,
+                    "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
+                    "kids": next((p["count"] for p in userdata.passengers if p["type"] == "kid"), 0),
+                    "trip_type": userdata.trip_type,
+                    "return_date": userdata.return_date
+                }
+            ))
+
         if return_date:
             parsed_ret = dateparser.parse(return_date)
             if not parsed_ret:
                 return await self._publish(json_response(
-                    "error", "flight_search",
+                    "error", 1,
                     "Couldn't understand the return date. Please say it clearly."
                 ))
             userdata.return_date = parsed_ret.strftime("%Y-%m-%d")
+            await self._publish(json_response(
+                "partial", 1, "Return date added.",
+                {
+                    "from_city": userdata.from_city,
+                    "to_city": userdata.to_city,
+                    "departure_date": userdata.departure_date,
+                    "flight_class": userdata.flight_class,
+                    "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
+                    "kids": next((p["count"] for p in userdata.passengers if p["type"] == "kid"), 0),
+                    "trip_type": userdata.trip_type,
+                    "return_date": userdata.return_date
+                }
+            ))
 
         if flight_class:
             userdata.flight_class = flight_class.lower().strip()
+            await self._publish(json_response(
+                "partial", 1, "Flight class selected.",
+                {
+                    "from_city": userdata.from_city,
+                    "to_city": userdata.to_city,
+                    "departure_date": userdata.departure_date,
+                    "flight_class": userdata.flight_class,
+                    "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
+                    "kids": next((p["count"] for p in userdata.passengers if p["type"] == "kid"), 0),
+                    "trip_type": userdata.trip_type,
+                    "return_date": userdata.return_date
+                }
+            ))
+
         if adults is not None:
             userdata.passengers = userdata.passengers or []
             adult_entry = next((p for p in userdata.passengers if p["type"] == "adult"), None)
@@ -148,6 +218,20 @@ class Assistant(Agent):
                 adult_entry["count"] = max(1, adults)
             else:
                 userdata.passengers.append({"type": "adult", "count": max(1, adults)})
+            await self._publish(json_response(
+                "partial", 1, "Adult passengers updated.",
+                {
+                    "from_city": userdata.from_city,
+                    "to_city": userdata.to_city,
+                    "departure_date": userdata.departure_date,
+                    "flight_class": userdata.flight_class,
+                    "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
+                    "kids": next((p["count"] for p in userdata.passengers if p["type"] == "kid"), 0),
+                    "trip_type": userdata.trip_type,
+                    "return_date": userdata.return_date
+                }
+            ))
+
         if kids is not None:
             userdata.passengers = userdata.passengers or []
             kid_entry = next((p for p in userdata.passengers if p["type"] == "kid"), None)
@@ -155,8 +239,35 @@ class Assistant(Agent):
                 kid_entry["count"] = max(0, kids)
             else:
                 userdata.passengers.append({"type": "kid", "count": max(0, kids)})
+            await self._publish(json_response(
+                "partial", 1, "Kids count recorded.",
+                {
+                    "from_city": userdata.from_city,
+                    "to_city": userdata.to_city,
+                    "departure_date": userdata.departure_date,
+                    "flight_class": userdata.flight_class,
+                    "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
+                    "kids": next((p["count"] for p in userdata.passengers if p["type"] == "kid"), 0),
+                    "trip_type": userdata.trip_type,
+                    "return_date": userdata.return_date
+                }
+            ))
+
         if trip_type:
             userdata.trip_type = trip_type.lower()
+            await self._publish(json_response(
+                "partial", 1, "Trip type confirmed.",
+                {
+                    "from_city": userdata.from_city,
+                    "to_city": userdata.to_city,
+                    "departure_date": userdata.departure_date,
+                    "flight_class": userdata.flight_class,
+                    "adults": next((p["count"] for p in userdata.passengers if p["type"] == "adult"), 1),
+                    "kids": next((p["count"] for p in userdata.passengers if p["type"] == "kid"), 0),
+                    "trip_type": userdata.trip_type,
+                    "return_date": userdata.return_date
+                }
+            ))
 
         required_fields = [
             "from_city", "to_city", "departure_date",
@@ -176,7 +287,7 @@ class Assistant(Agent):
         if getattr(userdata, "trip_type", None) == "round trip" and not userdata.return_date:
             res = json_response(
                 "partial",
-                "collect_flight_info",
+                1,
                 "What’s your return date?",
                 {"missing_field": "return_date"}
             )
@@ -190,7 +301,7 @@ class Assistant(Agent):
                 value = next((p["count"] for p in userdata.passengers if p["type"] == "adult"), None)
                 if value is None or value < 1:
                     next_question = field_prompts[field]
-                    res = json_response("partial", "collect_flight_info", next_question, {"missing_field": field})
+                    res = json_response("partial", 1, next_question, {"missing_field": field})
                     return res
                 continue
 
@@ -199,7 +310,7 @@ class Assistant(Agent):
                 # ⚡ If kids == 0, accept it as valid
                 if value is None or value < 0:
                     next_question = field_prompts[field]
-                    res = json_response("partial", "collect_flight_info", next_question, {"missing_field": field})
+                    res = json_response("partial", 1, next_question, {"missing_field": field})
                     return res
                 continue
 
@@ -208,11 +319,11 @@ class Assistant(Agent):
                 # For strings, check for missing/empty
                 if value is None or (isinstance(value, str) and not value.strip()):
                     next_question = field_prompts[field]
-                    res = json_response("partial", "collect_flight_info", next_question, {"missing_field": field})
+                    res = json_response("partial", 1, next_question, {"missing_field": field})
                     return res
 
         res = json_response("success",
-                            "searchForm",
+                            1,
                             "",
                             {
                                 "from_city": userdata.from_city,
@@ -247,13 +358,13 @@ class Assistant(Agent):
             if not val:
                 missing_fields.append(field)
         if missing_fields:
-            return json_response("error", "flight_search", f"Missing fields: {', '.join(missing_fields)}")
+            return json_response("error", 1, f"Missing fields: {', '.join(missing_fields)}")
         # Parse natural language dates
         parsed_dep = dateparser.parse(departure_date)
         if not parsed_dep:
             return await self._publish({
                 "status": "error",
-                "action": "flight_search",
+                "action": 2,
                 "message": "Could not understand the departure date. Please say the date clearly."
             })
         departure_date_str = parsed_dep.strftime("%Y-%m-%d")
@@ -263,7 +374,7 @@ class Assistant(Agent):
             if not parsed_ret:
                 return await self._publish({
                     "status": "error",
-                    "action": "flight_search",
+                    "action": 2,
                     "message": "Could not understand the return date. Please say the date clearly."
                 })
             return_date_str = parsed_ret.strftime("%Y-%m-%d")
@@ -274,7 +385,7 @@ class Assistant(Agent):
         if not isinstance(adults, int) or adults < 1:
             return await self._publish({
                 "status": "error",
-                "action": "flight_search",
+                "action": 2,
                 "message": "Please specify the number of adult passengers as a positive number."
             })
 
@@ -288,7 +399,7 @@ class Assistant(Agent):
         if not available_flights:
             return await self._publish({
                 "status": "error",
-                "action": "flight_search",
+                "action": 2,
                 "message": f"No flights found from {from_city} to {to_city} on {departure_date_str}."
             })
 
@@ -305,7 +416,7 @@ class Assistant(Agent):
 
         # Publish success response with flights and passenger info
         res = json_response("success",
-                            "searchResults",
+                            2,
                             f"Found {len(available_flights)} flights from {from_city} to {to_city} on {departure_date_str}.",
                             {
                                 "from_city": from_city,
@@ -331,20 +442,20 @@ class Assistant(Agent):
         User says "option 3" → option=3 → selects flights[2]
         """
         if not option or not isinstance(option, int) or option < 1:
-            return json_response("error", "flight_selection", "Please say a valid option number (e.g., 1, 2, 3).")
+            return json_response("error", 3, "Please say a valid option number (e.g., 1, 2, 3).")
 
         print("Selected flight: {}".format(option))
         userdata = _get_userdata(context)
         print(userdata)
         if not userdata.available_flights:
-            return json_response("error", "flight_selection", "No flight list available. Search again first.")
+            return json_response("error", 3, "No flight list available. Search again first.")
 
         # Map option → DB record
         try:
             flight_record: dict = userdata.available_flights[option - 1]
             print(flight_record)
         except IndexError:
-            return json_response("error", "flight_selection",
+            return json_response("error", 3,
                                  f"Option {option} does not exist. Choose from 1-{len(userdata.available_flights)}.")
 
         userdata.selected_flight = flight_record
@@ -359,7 +470,7 @@ class Assistant(Agent):
         print(msg)
         res = json_response(
             "success",
-            "flightDetails",
+            3,
             msg,
             {"selected_flight": flight_record, "passenger_count": total_passengers}
         )
@@ -389,21 +500,21 @@ class Assistant(Agent):
             ]
     ):
         if not passenger_details or not isinstance(passenger_details, list):
-            return json_response("error", "passenger_details",
+            return json_response("error", 4,
                                  "Missing or invalid passenger_details. Provide a list of passenger info.")
 
         userdata = _get_userdata(context)
         expected_count = sum(p["count"] for p in userdata.passengers)
 
         if len(passenger_details) != expected_count:
-            return json_response("error", "passenger_details",
+            return json_response("error", 4,
                                  f"Passenger details count {len(passenger_details)} does not match expected {expected_count}.")
 
         userdata.passenger_details = passenger_details
 
         # Don’t calculate or publish payment summary here
         message = f"Passenger details received for {expected_count} travelers. Would you like to review the payment summary?"
-        res = json_response("success", "passengerForm", message, {"passenger_details": passenger_details})
+        res = json_response("success", 4, message, {"passenger_details": passenger_details})
         await self._publish(res)
         return res
 
@@ -416,7 +527,7 @@ class Assistant(Agent):
         userdata = _get_userdata(context)
 
         if not userdata.selected_flight or not userdata.passenger_details:
-            return json_response("error", "payment_summary",
+            return json_response("error", 5,
                                  "Missing flight or passenger details. Please complete those first.")
 
         expected_count = sum(p["count"] for p in userdata.passengers)
@@ -438,14 +549,14 @@ class Assistant(Agent):
             f"Would you like to confirm this booking?"
         )
 
-        res = json_response("success", "paymentSummary", message, {"payment_summary": payment_summary})
+        res = json_response("success", 5, message, {"payment_summary": payment_summary})
         await self._publish(res)
         return res
 
     @function_tool()
     async def confirm_booking(self, context: RunContext, confirm: bool = False):
         if not confirm:
-            return json_response("error", "booking_confirmation", "Booking not confirmed. Process aborted.")
+            return json_response("error", 6, "Booking not confirmed. Process aborted.")
 
         userdata = _get_userdata(context)
         print(self.participant)
@@ -472,10 +583,10 @@ class Assistant(Agent):
         result = supabase.table("bookings").insert(booking_data).execute()
         print(result)
         if not result.data:
-            return json_response("error", "booking_save", f"Failed to save booking.")
+            return json_response("error", 6, f"Failed to save booking.")
 
         booking_id = result.data[0]["booking_id"] if result.data else "N/A"
         userdata.payment_confirmed = True
-        res = json_response("success", "confirmation", f"Booking confirmed with booking ID {booking_id}. Thank you!")
+        res = json_response("success", 6, f"Booking confirmed with booking ID {booking_id}. Thank you!")
         await self._publish(res)
         return res
