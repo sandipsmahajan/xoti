@@ -674,6 +674,6 @@ class Assistant(Agent):
 
         booking_id = result.data[0]["booking_id"] if result.data else "N/A"
         userdata.payment_confirmed = True
-        res = json_response("success", 6, f"Booking confirmed with booking ID {booking_id}. Thank you!")
+        res = json_response("success", 6, f"Booking confirmed with booking ID {booking_id}. Thank you!", result.data[0])
         await self._publish(res)
         return res
