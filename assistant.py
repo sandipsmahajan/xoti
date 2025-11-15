@@ -64,6 +64,7 @@ def _get_userdata(context: RunContext) -> SessionData:
 
 
 class Assistant(Agent):
+    city_cache = None
 
     def __init__(self, participant=LocalParticipant):
         self.participant = participant
@@ -73,9 +74,10 @@ class Assistant(Agent):
 
                 1. ALWAYS use `collect_flight_info` to gather required fields one by one.
                 2. When all fields are collected, call `search_flights`.
-                3. After a successful search, **read the option list aloud** and ask the user for the **option number**.
+                3. After a successful search, **doesn't need to read flight details out loud** and ask the user for the **option number**.
                 4. Use `select_flight_by_option` with that number – **never** ask for a raw DB id.
                 5. Continue with `add_passenger_details` → `confirm_booking`.
+                6. Keep prompts short and simple. Ask questions in as few words as possible.
                 
                 Required fields for a flight search:
                 - from_city
@@ -93,6 +95,19 @@ class Assistant(Agent):
         self.flight_bookings = []
         self.hotel_bookings = []
 
+    async def _load_city_cache(self):
+        if self.city_cache is None:
+            response = supabase.table("flights") \
+                .select("from_city, from_city_code, to_city, to_city_code") \
+                .execute()
+
+            cache = {}
+            for row in response.data:
+                cache[row["from_city"].strip().lower()] = row["from_city_code"]
+                cache[row["to_city"].strip().lower()] = row["to_city_code"]
+
+            self.city_cache = cache
+
     async def _publish(self, payload: dict):
         await self.participant.publish_data(
             payload=json.dumps(payload).encode("utf-8"),
@@ -101,43 +116,14 @@ class Assistant(Agent):
         print(payload)
 
     async def fetch_city_code(self, city_name: str, field: str):
-        """
-        Generic helper to fetch city code from Supabase flights table.
-        field = 'from_city' or 'to_city'
-        Returns tuple: (canonical_city_name, city_code)
-        or None if not found.
-        """
         if not city_name:
             return None
 
-        city_name = city_name.strip().lower()
+        await self._load_city_cache()
 
-        # Query both columns, but prioritize whichever field was specified
-        response = supabase.table("flights") \
-            .select("from_city, from_city_code, to_city, to_city_code") \
-            .or_(f"from_city.ilike.%{city_name}%,to_city.ilike.%{city_name}%") \
-            .limit(1) \
-            .execute()
-
-        if not response.data or len(response.data) == 0:
-            return None
-
-        record = response.data[0]
-
-        # If the field we expect matches, return that directly
-        if field == "from_city":
-            if record["from_city"].lower() == city_name:
-                return record["from_city"], record["from_city_code"]
-            elif record["to_city"].lower() == city_name:
-                # fallback if user used a destination city as departure
-                return record["to_city"], record["to_city_code"]
-
-        elif field == "to_city":
-            if record["to_city"].lower() == city_name:
-                return record["to_city"], record["to_city_code"]
-            elif record["from_city"].lower() == city_name:
-                # fallback if user swapped direction
-                return record["from_city"], record["from_city_code"]
+        key = city_name.strip().lower()
+        if key in self.city_cache:
+            return city_name.strip(), self.city_cache[key]
 
         return None
 
@@ -359,13 +345,13 @@ class Assistant(Agent):
             "flight_class", "adults", "kids", "trip_type"
         ]
         field_prompts = {
-            "from_city": "Where are you flying from?",
-            "to_city": "What’s your destination?",
-            "departure_date": "When do you plan to depart?",
-            "flight_class": "Which class would you like to travel in — economy, premium economy, or business?",
-            "adults": "How many adults are flying?",
-            "kids": "How many kids are flying?",
-            "trip_type": "Is this a one-way trip or a round trip?"
+            "from_city": "From?",
+            "to_city": "To?",
+            "departure_date": "Date? Do not ask for date format",
+            "flight_class": "Class? (eco/premium/business)",
+            "adults": "Adults?",
+            "kids": "Kids?",
+            "trip_type": "One-way or round?"
         }
 
         # --- dynamic check: round trip needs return_date ---
@@ -438,6 +424,9 @@ class Assistant(Agent):
             trip_type: str = "one way",
             return_date: str | None = None
     ):
+        """
+        Doesn’t need to read flight details out loud.
+        """
         missing_fields = []
         for field, val in {"from_city": from_city, "to_city": to_city, "departure_date": departure_date,
                            "flight_class": flight_class}.items():
@@ -481,6 +470,9 @@ class Assistant(Agent):
         # Now proceed to query flights from your DB with from_city, to_city, departure_date_str, flight_class...
         response = supabase.table("flights").select("*").ilike("from_city", from_city).ilike("to_city", to_city).execute()
         available_flights = response.data or []
+
+        for f in available_flights:
+            f["departure_date"] = departure_date
 
         if not available_flights:
             return await self._publish({
