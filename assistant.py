@@ -14,6 +14,7 @@ import os
 # SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxoZmRvZ29lZnJ3dG5oZHRpYnNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA0NTIxNzgsImV4cCI6MjA3NjAyODE3OH0.mIpn-FbyvbobjxzF_Zb5nL2yPAa61Ke3Ed78LZC5pQ0"
 SUPABASE_URL="https://lhfdogoefrwtnhdtibsh.supabase.co"
+
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 @dataclass
@@ -39,6 +40,14 @@ class SessionData:
     payment_confirmed: bool = False
     passenger_details: List[Dict] | None = None
     payment_summary: dict | None = None
+    # ==== FOOD ORDERING ====
+    selected_area: str | None = None
+    selected_restaurant: dict | None = None
+    available_restaurants: list | None = None
+    cart: List[Dict] | None = None
+    delivery_address: dict | None = None
+    food_payment_summary: dict | None = None
+    food_order_confirmed: bool = False
 
 class PassengerDetail(TypedDict):
     name: str
@@ -70,24 +79,71 @@ class Assistant(Agent):
         self.participant = participant
         super().__init__(
             instructions="""
-                You are a JSON-only assistant for booking flights, hotels, rides, and food.
-
-                1. ALWAYS use `collect_flight_info` to gather required fields one by one.
-                2. When all fields are collected, call `search_flights`.
-                3. After a successful search, **doesn't need to read flight details out loud** and ask the user for the **option number**.
-                4. Use `select_flight_by_option` with that number – **never** ask for a raw DB id.
-                5. Continue with `add_passenger_details` → `confirm_booking`.
-                6. Keep prompts short and simple. Ask questions in as few words as possible.
-                
-                Required fields for a flight search:
-                - from_city
-                - to_city
-                - departure_date
-                - flight_class
-                - adults
-                - kids
-
-                Use natural language to ask for missing info. 
+                You are a JSON-only assistant that can book Flights and Food delivery.
+                NEVER speak normal text. Always respond with valid JSON only.
+        
+                INTENT DETECTION (do this first):
+                - Words like flight, fly, airport, ticket, travel, departure → start FLIGHT flow
+                - Words like food, hungry, order, delivery, restaurant, burger, pizza, machboos → start FOOD flow
+        
+                ——————— FLIGHT FLOW (actions 1–6) ———————
+                Required fields (collect one by one):
+                1. from_city
+                2. to_city
+                3. departure_date
+                4. flight_class (economy / premium / business)
+                5. adults (minimum 1)
+                6. kids (0 or more)
+                7. trip_type (one-way or round-trip) → if round-trip, also ask return_date
+        
+                Exact sequence:
+                1. ALWAYS start with collect_flight_info
+                2. When all required fields collected → automatically call search_flights
+                3. Show results → ask only for "option number"
+                4. User says option X → call select_flight_by_option(X)
+                5. Then add_passenger_details → show_payment_summary → confirm_booking
+        
+                ——————— FOOD FLOW (actions 7–13) ———————
+                Required fields (collect strictly in this order):
+        
+                Phase 1 – Area
+                • selected_area (Salmiya, Hawally, etc.)
+        
+                Phase 2 – Restaurant
+                • User must pick by option number only → select_restaurant_by_option
+        
+                Phase 3 – Cart (can be multiple items)
+                • User adds items by menu option number + quantity → add_to_cart
+                • Allow adding many times until user says "done", "checkout", "deliver"
+        
+                Phase 4 – Delivery Address (collect one by one):
+                    1. full_name
+                    2. phone
+                    3. flat / apartment number
+                    4. building
+                    5. street
+                    6. area (pre-filled but confirm)
+                    7. notes (optional)
+        
+                Phase 5 – Payment & Confirm
+                • After address complete → automatically show_payment_summary_food
+                • User confirms → confirm_food_order(confirm=true)
+        
+                FOOD FLOW SEQUENCE (never break):
+                collect_food_info                → only ask "Which area for delivery?"
+                search_restaurants               → auto-called when area known
+                select_restaurant_by_option      → user picks by number
+                add_to_cart                      → repeat as needed
+                set_delivery_address             → start when user is ready to checkout
+                show_payment_summary_food        → auto after address complete
+                confirm_food_order               → only on final confirmation
+        
+                GENERAL RULES (both flows):
+                • Keep questions ultra short: "From?", "To?", "Date?", "Which area?", "Full name?", "Phone?"
+                • Never read full lists out loud — just publish JSON and let frontend display
+                • Never ask for raw IDs — always use option numbers
+                • If user switches flow (flight ↔ food), reset the previous one and start fresh
+                • You are 100% JSON. No explanations, no apologies, no extra text ever. 
                 """
         )
         self.ride_bookings = []
@@ -668,4 +724,242 @@ class Assistant(Agent):
         userdata.payment_confirmed = True
         res = json_response("success", 6, f"Booking confirmed with booking ID {booking_id}. Thank you!", result.data[0])
         await self._publish(res)
+        return res
+
+    # ===================== FOOD ORDERING FLOW =====================
+
+    @function_tool()
+    async def collect_food_info(
+        self,
+        context: RunContext,
+        area: str | None = None
+    ):
+        """Step 1: Ask for delivery area first"""
+        userdata = _get_userdata(context)
+
+        if area:
+            userdata.selected_area = area.strip().title()
+            await self._publish(json_response(
+                "partial", 7,
+                f"Got it! Looking for restaurants in {userdata.selected_area}.",
+                {"selected_area": userdata.selected_area}
+            ))
+
+        if not userdata.selected_area:
+            return json_response("partial", 7, "Which area do you want delivery to? (e.g., Salmiya, Hawally, Kuwait City)")
+
+        # All required collected → proceed automatically
+        return json_response("success", 7, "", {"selected_area": userdata.selected_area})
+
+    @function_tool()
+    async def search_restaurants(self, context: RunContext, area: str):
+        """Step 2: Show available restaurants in the area"""
+        userdata = _get_userdata(context)
+
+        response = supabase.table("restaurants")\
+            .select("*")\
+            .ilike("area", area.strip())\
+            .execute()
+
+        restaurants = response.data or []
+
+        if not restaurants:
+            return json_response("error", 8, f"Sorry, no restaurants deliver to {area} right now.")
+
+        userdata.available_restaurants = restaurants
+        userdata.cart = []  # reset cart
+
+        res = json_response(
+            "success", 8,
+            f"Found {len(restaurants)} restaurants in {area}. Which one would you like?",
+            {"available_restaurants": restaurants}
+        )
+        await self._publish(res)
+        return res
+
+    @function_tool()
+    async def select_restaurant_by_option(self, context: RunContext, option: int):
+        """User says "option 2" → pick that restaurant and show menu"""
+        userdata = _get_userdata(context)
+        if not userdata.available_restaurants or option < 1 or option > len(userdata.available_restaurants):
+            return json_response("error", 9, "Invalid restaurant option.")
+
+        restaurant = userdata.available_restaurants[option - 1]
+        userdata.selected_restaurant = restaurant
+
+        # Load menu
+        menu_resp = supabase.table("menu_items")\
+            .select("*")\
+            .eq("restaurant_id", restaurant["id"])\
+            .execute()
+
+        menu = menu_resp.data or []
+
+        res = json_response(
+            "success", 9,
+            f"Menu for {restaurant['name']}. What would you like to order?",
+            {
+                "selected_restaurant": restaurant,
+                "menu_items": menu
+            }
+        )
+        await self._publish(res)
+        return res
+
+    @function_tool()
+    async def add_to_cart(
+        self,
+        context: RunContext,
+        item_option: int,
+        quantity: int = 1
+    ):
+        """Add item by option number shown in menu"""
+        userdata = _get_userdata(context)
+        if not userdata.selected_restaurant:
+            return json_response("error", 10, "No restaurant selected yet.")
+
+        menu_resp = supabase.table("menu_items")\
+            .select("*")\
+            .eq("restaurant_id", userdata.selected_restaurant["id"])\
+            .execute()
+        menu = menu_resp.data
+
+        if item_option < 1 or item_option > len(menu):
+            return json_response("error", 10, "Invalid menu item number.")
+
+        item = menu[item_option - 1]
+        cart_item = {"menu_item": item, "quantity": quantity}
+
+        if not userdata.cart:
+            userdata.cart = []
+        # Replace if same item exists
+        existing = next((c for c in userdata.cart if c["menu_item"]["id"] == item["id"]), None)
+        if existing:
+            existing["quantity"] += quantity
+        else:
+            userdata.cart.append(cart_item)
+
+        subtotal = sum(c["menu_item"]["price"] * c["quantity"] for c in userdata.cart)
+
+        res = json_response(
+            "success", 10,
+            f"Added {quantity}x {item['name']}. Cart total: {subtotal:.3f} KWD",
+            {"cart": userdata.cart, "subtotal": round(subtotal, 3)}
+        )
+        await self._publish(res)
+        return res
+
+    @function_tool()
+    async def set_delivery_address(
+        self,
+        context: RunContext,
+        full_name: str | None = None,
+        phone: str | None = None,
+        flat: str | None = None,
+        floor: str | None = None,
+        building: str | None = None,
+        street: str | None = None,
+        area: str | None = None,
+        notes: str | None = None
+    ):
+        userdata = _get_userdata(context)
+        address = userdata.delivery_address or {}
+
+        updated = False
+        if full_name: address["full_name"] = full_name; updated = True
+        if phone: address["phone"] = phone; updated = True
+        if flat: address["flat"] = flat; updated = True
+        if floor: address["floor"] = floor; updated = True
+        if building: address["building"] = building; updated = True
+        if street: address["street"] = street; updated = True
+        if area: address["area"] = area; updated = True
+        if notes is not None: address["notes"] = notes; updated = True
+
+        userdata.delivery_address = address
+
+        required = ["full_name", "phone", "flat", "building", "street", "area"]
+        missing = [f for f in required if not address.get(f)]
+
+        if missing:
+            prompts = {
+                "full_name": "Your full name?",
+                "phone": "Phone number?",
+                "flat": "Flat/Apartment number?",
+                "building": "Building name/number?",
+                "street": "Street name?",
+                "area": "Area (we already have it, just confirming)?",
+            }
+            next_q = prompts[missing[0]]
+            return json_response("partial", 11, next_q, {"missing_field": missing[0]})
+
+        await self._publish(json_response(
+            "success", 11,
+            "Delivery address saved.",
+            {"delivery_address": address}
+        ))
+        return json_response("success", 11, "", {"delivery_address": address})
+
+    @function_tool()
+    async def show_payment_summary_food(self, context: RunContext):
+        userdata = _get_userdata(context)
+        if not userdata.cart or len(userdata.cart) == 0:
+            return json_response("error", 12, "Your cart is empty.")
+
+        subtotal = sum(c["menu_item"]["price"] * c["quantity"] for c in userdata.cart)
+        delivery_fee = 0.750  # fixed
+        total = subtotal + delivery_fee
+
+        summary = {
+            "subtotal": round(subtotal, 3),
+            "delivery_fee": delivery_fee,
+            "total": round(total, 3),
+            "currency": "KWD",
+            "cart": userdata.cart,
+            "restaurant": userdata.selected_restaurant["name"]
+        }
+        userdata.food_payment_summary = summary
+
+        msg = f"Subtotal: {subtotal:.3f} KWD + Delivery 0.750 KWD = Total {total:.3f} KWD. Confirm order?"
+        res = json_response("success", 12, msg, {"payment_summary": summary})
+        await self._publish(res)
+        return res
+
+    @function_tool()
+    async def confirm_food_order(self, context: RunContext, confirm: bool = False):
+        if not confirm:
+            return json_response("error", 13, "Order cancelled.")
+
+        userdata = _get_userdata(context)
+        summary = userdata.food_payment_summary
+
+        order_data = {
+            "booking_type": "food",
+            "user_id": str(uuid.uuid4()),
+            "item_id": userdata.selected_restaurant["id"],
+            "booking_details": json.dumps({
+                "restaurant": userdata.selected_restaurant,
+                "cart": userdata.cart,
+                "delivery_address": userdata.delivery_address,
+                "payment_summary": summary
+            }),
+            "payment_status": "confirmed",
+            "total_price": summary["total"],
+            "currency": "KWD",
+            "booking_date": "now()"
+        }
+
+        result = supabase.table("bookings").insert(order_data).execute()
+        if not result.data:
+            return json_response("error", 13, "Failed to place order.")
+
+        order_id = result.data[0].get("booking_id", "N/A")
+        estimated = "30-45 minutes"
+
+        res = json_response(
+            "success", 13,
+            f"Order #{order_id} confirmed! Estimated delivery: {estimated}",
+            {"order_id": order_id, "estimated_delivery": estimated}
+        )
+        await self._publish(res)
+        userdata.food_order_confirmed = True
         return res
