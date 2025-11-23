@@ -48,6 +48,7 @@ class SessionData:
     delivery_address: dict | None = None
     food_payment_summary: dict | None = None
     food_order_confirmed: bool = False
+    payment_method: str | None = None
 
 class PassengerDetail(TypedDict):
     name: str
@@ -80,7 +81,7 @@ class Assistant(Agent):
         super().__init__(
             instructions="""
                 You are a JSON-only assistant that can book Flights and Food delivery.
-                NEVER speak normal text. Always respond with valid JSON only.
+                NEVER speak normal text and do not mention dot, comma and all. Always respond with valid JSON only.
         
                 INTENT DETECTION (do this first):
                 - Words like flight, fly, airport, ticket, travel, departure → start FLIGHT flow
@@ -123,7 +124,8 @@ class Assistant(Agent):
                     4. building
                     5. street
                     6. area (pre-filled but confirm)
-                    7. notes (optional)
+                    7. governorate
+                    8. notes (optional)
         
                 Phase 5 – Payment & Confirm
                 • After address complete → automatically show_payment_summary_food
@@ -790,7 +792,7 @@ class Assistant(Agent):
         # Load menu
         menu_resp = supabase.table("menu_items")\
             .select("*")\
-            .eq("restaurant_id", restaurant["id"])\
+            .eq("restaurantID", restaurant["id"])\
             .execute()
 
         menu = menu_resp.data or []
@@ -820,7 +822,7 @@ class Assistant(Agent):
 
         menu_resp = supabase.table("menu_items")\
             .select("*")\
-            .eq("restaurant_id", userdata.selected_restaurant["id"])\
+            .eq("restaurantID", userdata.selected_restaurant["id"])\
             .execute()
         menu = menu_resp.data
 
@@ -828,24 +830,26 @@ class Assistant(Agent):
             return json_response("error", 10, "Invalid menu item number.")
 
         item = menu[item_option - 1]
-        cart_item = {"menu_item": item, "quantity": quantity}
+        cart_item = {"id": str(uuid.uuid4()), "item": item, "quantity": quantity, "currency": "KWD", "total": item["price"] * quantity}
 
         if not userdata.cart:
             userdata.cart = []
         # Replace if same item exists
-        existing = next((c for c in userdata.cart if c["menu_item"]["id"] == item["id"]), None)
+        existing = next((c for c in userdata.cart if c["item"]["id"] == item["id"]), None)
         if existing:
             existing["quantity"] += quantity
         else:
             userdata.cart.append(cart_item)
 
-        subtotal = sum(c["menu_item"]["price"] * c["quantity"] for c in userdata.cart)
+        subtotal = sum(c["item"]["price"] * c["quantity"] for c in userdata.cart)
+        total_quantity = sum(c["quantity"] for c in userdata.cart)
 
         res = json_response(
             "success", 10,
-            f"Added {quantity}x {item['name']}. Cart total: {subtotal:.3f} KWD",
+            f"Added {total_quantity}. Cart total: {subtotal:.3f} KWD",
             {"cart": userdata.cart, "subtotal": round(subtotal, 3)}
         )
+        print(res)
         await self._publish(res)
         return res
 
@@ -860,6 +864,7 @@ class Assistant(Agent):
         building: str | None = None,
         street: str | None = None,
         area: str | None = None,
+        governorate: str | None = None,
         notes: str | None = None
     ):
         userdata = _get_userdata(context)
@@ -873,11 +878,12 @@ class Assistant(Agent):
         if building: address["building"] = building; updated = True
         if street: address["street"] = street; updated = True
         if area: address["area"] = area; updated = True
+        if governorate: address["governorate"] = governorate; updated = True
         if notes is not None: address["notes"] = notes; updated = True
 
         userdata.delivery_address = address
 
-        required = ["full_name", "phone", "flat", "building", "street", "area"]
+        required = ["full_name", "phone", "flat", "building", "street", "area", "governorate"]
         missing = [f for f in required if not address.get(f)]
 
         if missing:
@@ -888,6 +894,7 @@ class Assistant(Agent):
                 "building": "Building name/number?",
                 "street": "Street name?",
                 "area": "Area (we already have it, just confirming)?",
+                "governorate": "Please confirm your governorate?",
             }
             next_q = prompts[missing[0]]
             return json_response("partial", 11, next_q, {"missing_field": missing[0]})
@@ -900,21 +907,28 @@ class Assistant(Agent):
         return json_response("success", 11, "", {"delivery_address": address})
 
     @function_tool()
-    async def show_payment_summary_food(self, context: RunContext):
+    async def show_payment_summary_food(self, context: RunContext, payment_method: str | None = None):
         userdata = _get_userdata(context)
         if not userdata.cart or len(userdata.cart) == 0:
             return json_response("error", 12, "Your cart is empty.")
 
-        subtotal = sum(c["menu_item"]["price"] * c["quantity"] for c in userdata.cart)
+        if payment_method:
+            userdata.payment_method = payment_method.strip().title()
+
+        if not userdata.payment_method:
+            return json_response("partial", 12, "How would you like to pay — KNET, Visa, or Cash?")
+
+        subtotal = sum(c["item"]["price"] * c["quantity"] for c in userdata.cart)
         delivery_fee = 0.750  # fixed
         total = subtotal + delivery_fee
 
         summary = {
             "subtotal": round(subtotal, 3),
-            "delivery_fee": delivery_fee,
+            "deliveryFee": delivery_fee,
             "total": round(total, 3),
             "currency": "KWD",
             "cart": userdata.cart,
+            "paymentMethod": userdata.payment_method,
             "restaurant": userdata.selected_restaurant["name"]
         }
         userdata.food_payment_summary = summary
@@ -958,7 +972,7 @@ class Assistant(Agent):
         res = json_response(
             "success", 13,
             f"Order #{order_id} confirmed! Estimated delivery: {estimated}",
-            {"order_id": order_id, "estimated_delivery": estimated}
+            {"orderId": order_id, "estimatedDeliveryMinutes": estimated, "status": "confirmed", "order": order_data}
         )
         await self._publish(res)
         userdata.food_order_confirmed = True
