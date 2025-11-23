@@ -1,7 +1,7 @@
 # agent.py
 from dotenv import load_dotenv
 from livekit import agents
-from livekit.agents import AgentSession
+from livekit.agents import AgentSession, ChatContext
 from livekit.plugins import openai, deepgram, silero
 import os
 from assistant import Assistant
@@ -28,6 +28,7 @@ async def entrypoint(ctx: agents.JobContext):
 
     assistant = Assistant(participant=ctx.room.local_participant)
     await session.start(room=ctx.room, agent=assistant)
+    await assistant.update_chat_ctx(ChatContext())
     await session.generate_reply(
         instructions="Greet the user warmly and tell them you can help book flights, order a food, book hotel, or book a rides."
     )
