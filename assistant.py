@@ -105,18 +105,16 @@ class Assistant(Agent):
                 → When all info collected → automatically call search_flights tool
                 → Show results with numbered options
                 → User says “option 2” or “number 3” → call select_flight_by_option
-                → Then collect passenger details (name, age, mobile for each)
+                
                 → Show payment summary → ask to confirm
                 
                 FOOD FLOW (strict order):
-                1. Which area for delivery? (Salmiya, Hawally, etc.)
-                → When area is known → automatically call search_restaurants
+                → search_restaurants
                 → Show restaurants with numbers
-                → User picks by number → call select_restaurant_by_option → show menu
+                → User picks by number → call select_restaurant by option or name → show menu
                 → User adds items: “two number 5” or “three burgers” → call add_to_cart
                 → When user says “done”, “checkout”, “that’s all” → start collecting delivery address
-                → Collect address fields one by one (name → phone → flat → building → street → confirm area → governorate → notes)
-                → When address complete → ask payment method (KNET/Visa/Cash)
+                → ask payment method (KNET/Visa/Cash)
                 → Show final total → ask to confirm
                 
                 General Rules:
@@ -593,7 +591,7 @@ class Assistant(Agent):
         await self._publish(res)
         return res
 
-    @function_tool()
+    # @function_tool()
     async def add_passenger_details(
             self,
             context: RunContext,
@@ -639,13 +637,12 @@ class Assistant(Agent):
     async def show_payment_summary(self, context: RunContext):
         """
         Display the payment summary before confirming the booking.
-        Called after passenger details are added.
         """
         userdata = _get_userdata(context)
 
-        if not userdata.selected_flight or not userdata.passenger_details:
-            return json_response("error", 5,
-                                 "Missing flight or passenger details. Please complete those first.")
+        # if not userdata.selected_flight or not userdata.passenger_details:
+        #     return json_response("error", 5,
+        #                          "Missing flight or passenger details. Please complete those first.")
 
         expected_count = sum(p["count"] for p in userdata.passengers)
         total_price = float(userdata.selected_flight["price"]) * expected_count
@@ -711,7 +708,7 @@ class Assistant(Agent):
 
     # ===================== FOOD ORDERING FLOW =====================
 
-    @function_tool()
+    # @function_tool()
     async def collect_food_info(
         self,
         context: RunContext,
@@ -755,7 +752,7 @@ class Assistant(Agent):
         res = json_response(
             "success", 8,
             f"Found {len(restaurants)} restaurants in {area}. Which one would you like?",
-            {"available_restaurants": restaurants}
+            {"restaurants": restaurants}
         )
         await self._publish(res)
         return res
@@ -782,8 +779,8 @@ class Assistant(Agent):
             "success", 9,
             f"Menu for {restaurant['name']}. What would you like to order?",
             {
-                "selected_restaurant": restaurant,
-                "menu_items": menu
+                "restaurant": restaurant,
+                "items": menu
             }
         )
         await self._publish(res)
@@ -828,13 +825,13 @@ class Assistant(Agent):
         res = json_response(
             "success", 10,
             f"Added {total_quantity}. Cart total: {subtotal:.3f} KWD",
-            {"cart": userdata.cart, "subtotal": round(subtotal, 3)}
+            {"cartItems": userdata.cart, "subtotal": round(subtotal, 3)}
         )
         print(res)
         await self._publish(res)
         return res
 
-    @function_tool()
+    # @function_tool()
     async def set_delivery_address(
         self,
         context: RunContext,
@@ -883,7 +880,7 @@ class Assistant(Agent):
         await self._publish(json_response(
             "success", 11,
             "Delivery address saved.",
-            {"delivery_address": address}
+            {"address": address}
         ))
         return json_response("success", 11, "", {"delivery_address": address})
 
@@ -915,7 +912,7 @@ class Assistant(Agent):
         userdata.food_payment_summary = summary
 
         msg = f"Subtotal: {subtotal:.3f} KWD + Delivery 0.750 KWD = Total {total:.3f} KWD. Confirm order?"
-        res = json_response("success", 12, msg, {"payment_summary": summary})
+        res = json_response("success", 12, msg, {"paymentSummary": summary})
         await self._publish(res)
         return res
 
@@ -949,7 +946,8 @@ class Assistant(Agent):
 
         order_id = result.data[0].get("booking_id", "N/A")
         estimated = "30-45 minutes"
-
+        # order_data["order_id"] = order_id
+        # order_data["estimated"] = estimated
         res = json_response(
             "success", 13,
             f"Order #{order_id} confirmed! Estimated delivery: {estimated}",
