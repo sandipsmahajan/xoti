@@ -4,3 +4,4 @@ python-dotenv
 httpx
 flask
 supabase
+rapidfuzz
