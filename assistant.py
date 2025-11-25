@@ -486,6 +486,7 @@ class Assistant(Agent):
             "flight": userdata.selected_flight,
             "class": userdata.flight_class,
             "trip_type": userdata.trip_type,
+            "paymentMethod": userdata.payment_method,
         }
         res = json_response("success", 5,
                             f"Total: {total:.3f} {userdata.selected_flight['currency']}\n\nConfirm your flight?",
