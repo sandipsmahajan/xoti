@@ -1,6 +1,7 @@
 import json
 import re
 import uuid
+from datetime import datetime
 from typing import List, Dict, TypedDict, Optional, Any
 
 import dateparser
@@ -436,7 +437,7 @@ class Assistant(Agent):
                              f"Selected {flight['airline']} to {flight['to_city']}\n"
                              f"{total_passengers} passenger(s) × {flight['price']} = {total_price:.3f} {flight['currency']}\n\n"
                              f"Ready to book?",
-                             {"total": total_price})
+                             {"selected_flight": flight, "passenger_count": total_passengers})
         await self._publish(res)
         return res
 
@@ -459,7 +460,10 @@ class Assistant(Agent):
 
         userdata.payment_summary = {
             "total_price": total,
-            "currency": userdata.selected_flight.get("currency", "KWD")
+            "currency": userdata.selected_flight.get("currency", "KWD"),
+            "flight": userdata.selected_flight,
+            "class": userdata.flight_class,
+            "trip_type": userdata.trip_type,
         }
         res = json_response("success", 4,
                              f"Total: {total:.3f} {userdata.selected_flight['currency']}\n\nConfirm your flight?",
@@ -488,7 +492,7 @@ class Assistant(Agent):
             "booking_type": "flight",
             "user_id": str(uuid.uuid4()),
             "item_id": flight["id"],
-            "booking_details": json.dumps({
+            "booking_details": {
                 "from": userdata.from_city,
                 "to": userdata.to_city,
                 "date": userdata.departure_date,
@@ -496,11 +500,11 @@ class Assistant(Agent):
                 "passengers": userdata.passengers,
                 "class": userdata.flight_class,
                 "flight": flight
-            }),
+            },
             "payment_status": "confirmed",
             "total_price": total_price,
             "currency": flight["currency"],
-            "booking_date": "now()"
+            "booking_date": datetime.now().isoformat()
         }
 
         result = supabase.table("bookings").insert(booking_data).execute()
@@ -694,16 +698,16 @@ class Assistant(Agent):
             "booking_type": "food",
             "user_id": str(uuid.uuid4()),
             "item_id": userdata.selected_restaurant["id"],
-            "booking_details": json.dumps({
+            "booking_details": {
                 "restaurant": userdata.selected_restaurant,
                 "cart": userdata.cart,
                 "delivery_address": userdata.delivery_address or "Address not collected",
                 "payment_summary": summary
-            }),
-            "payment_status": "confirmed",
+            },
+            "payment_status": "Confirmed",
             "total_price": summary["total"],
             "currency": "KWD",
-            "booking_date": "now()"
+            "booking_date": datetime.now().isoformat()
         }
 
         result = supabase.table("bookings").insert(order_data).execute()
