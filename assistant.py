@@ -174,7 +174,7 @@ class Assistant(Agent):
                    → All handled automatically by select_flight tool using fuzzy matching
                 
                 → After selection → show total price (per passenger × count)
-                → Call show_flight_payment → ask: "How would you like to pay — KNET, Visa, or Cash?"
+                → Call show_flight_payment → ask: "How would you like to pay — KNET, or Visa?"
                 → Show final total → "Confirm your flight?"
                 → If yes → call confirm_flight_booking → booking saved + confirmation message
                 
