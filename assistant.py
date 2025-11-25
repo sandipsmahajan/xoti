@@ -1,5 +1,8 @@
+import asyncio
 import json
+import random
 import re
+import string
 import uuid
 from datetime import datetime
 from typing import List, Dict, TypedDict, Optional, Any
@@ -14,10 +17,11 @@ from supabase import create_client, Client
 
 # SUPABASE_URL = os.getenv("SUPABASE_URL")
 # SUPABASE_KEY = os.getenv("SUPABASE_KEY")
-SUPABASE_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxoZmRvZ29lZnJ3dG5oZHRpYnNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA0NTIxNzgsImV4cCI6MjA3NjAyODE3OH0.mIpn-FbyvbobjxzF_Zb5nL2yPAa61Ke3Ed78LZC5pQ0"
-SUPABASE_URL="https://lhfdogoefrwtnhdtibsh.supabase.co"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxoZmRvZ29lZnJ3dG5oZHRpYnNoIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA0NTIxNzgsImV4cCI6MjA3NjAyODE3OH0.mIpn-FbyvbobjxzF_Zb5nL2yPAa61Ke3Ed78LZC5pQ0"
+SUPABASE_URL = "https://lhfdogoefrwtnhdtibsh.supabase.co"
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 @dataclass
 class SessionData:
@@ -46,11 +50,13 @@ class SessionData:
     food_order_confirmed: bool = False
     payment_method: str | None = None
 
+
 class PassengerDetail(TypedDict):
     name: str
     age: int
     type: str  # "adult" or "kid"
     passport_number: str | None  # optional
+
 
 def json_response(status: str, action: int, message: str = None, data=None):
     return {
@@ -60,12 +66,14 @@ def json_response(status: str, action: int, message: str = None, data=None):
         "data": data,
     }
 
+
 def _get_userdata(context: RunContext) -> SessionData:
     if "userdata" not in context.session.userdata:
         print("Userdata not found, using default values")
         context.session.userdata["userdata"] = SessionData()
         context.session.userdata["userdata"].passengers = [{"type": "adult", "count": 0}, {"type": "kid", "count": -1}]
     return context.session.userdata["userdata"]
+
 
 CITIES = [
     {"city": "Riyadh"},
@@ -78,9 +86,11 @@ CITIES = [
     {"city": "Doha"}
 ]
 
+
 def fuzzy_match_city(user_input: str):
     """Match city with typos using your exact fuzzy_match"""
     return fuzzy_match(user_input, CITIES, "city", threshold=68)
+
 
 AIRLINES = [
     {"airline": "Flynas"},
@@ -95,9 +105,11 @@ AIRLINES = [
     {"airline": "Etihad Airways"}
 ]
 
+
 def fuzzy_match_airline(user_input: str):
     """Fuzzy match airline name (handles 'Qatar', 'Etihad', 'Emirates', etc.)"""
     return fuzzy_match(user_input, AIRLINES, "airline", threshold=68)
+
 
 def fuzzy_match(user_input: str, choices: list, key: str, threshold: int = 70):
     if not choices:
@@ -112,6 +124,7 @@ def fuzzy_match(user_input: str, choices: list, key: str, threshold: int = 70):
         index = names.index(match_str)
         return choices[index]
     return None
+
 
 class Assistant(Agent):
     city_cache = None
@@ -259,7 +272,7 @@ class Assistant(Agent):
         if not hasattr(userdata, "passengers"):
             userdata.passengers = [{"type": "adult", "count": 1}]
             userdata.flight_class = "economy"
-            userdata.trip_type = "one way"
+            userdata.trip_type = "one-way"
             userdata._kids_asked = False
 
         # Update fields
@@ -293,7 +306,7 @@ class Assistant(Agent):
                 )
                 return res
             canonical_name, city_code = city_result
-            userdata.to_city = canonical_name
+            userdata.to_city_code = city_code
         if departure_date:
             parsed = dateparser.parse(departure_date, settings={'PREFER_DATES_FROM': 'future'})
             if not parsed:
@@ -306,7 +319,7 @@ class Assistant(Agent):
             userdata.return_date = parsed.strftime("%Y-%m-%d")
         if trip_type:
             clean = trip_type.lower()
-            userdata.trip_type = "round trip" if any(w in clean for w in ["round", "return", "back"]) else "one way"
+            userdata.trip_type = "round trip" if any(w in clean for w in ["round", "return", "back"]) else "one-way"
         if adults is not None:
             count = max(1, int(adults))
             adult = next((p for p in userdata.passengers if p["type"] == "adult"), None)
@@ -395,8 +408,17 @@ class Assistant(Agent):
             for i, f in enumerate(flights)
         )
         res = json_response("success", 2,
-                             f"Found {len(flights)} flights:\n\n{list_text}\n\nWhich one? Say the number or city.",
-                             {"flights": flights})
+                            f"Found {len(flights)} flights:\n\n{list_text}\n\nWhich one? Say the number or city.",
+                            {
+                                "from_city": userdata.from_city,
+                                "to_city": userdata.to_city,
+                                "departure_date": userdata.departure_date,
+                                "return_date": userdata.return_date,
+                                "available_flights": userdata.available_flights,
+                                "passengers": userdata.passengers,
+                                "trip_type": userdata.trip_type
+                            })
+        await asyncio.sleep(2)
         await self._publish(res)
         return res
 
@@ -434,10 +456,10 @@ class Assistant(Agent):
             price = 0.0
         total_price = round(price * total_passengers, 3)
         res = json_response("success", 3,
-                             f"Selected {flight['airline']} to {flight['to_city']}\n"
-                             f"{total_passengers} passenger(s) × {flight['price']} = {total_price:.3f} {flight['currency']}\n\n"
-                             f"Ready to book?",
-                             {"selected_flight": flight, "passenger_count": total_passengers})
+                            f"Selected {flight['airline']} to {flight['to_city']}\n"
+                            f"{total_passengers} passenger(s) × {flight['price']} = {total_price:.3f} {flight['currency']}\n\n"
+                            f"Ready to book?",
+                            {"selected_flight": flight, "passenger_count": total_passengers})
         await self._publish(res)
         return res
 
@@ -452,7 +474,7 @@ class Assistant(Agent):
             userdata.payment_method = payment_method.strip().title()
 
         if not getattr(userdata, "payment_method", None):
-            return json_response("partial", 5, "How would you like to pay — KNET, Visa, or Cash?")
+            return json_response("partial", 5, "How would you like to pay — KNET, Visa")
 
         price = float(userdata.selected_flight.get("price", 0) or 0)
         total_passengers = sum(p["count"] for p in userdata.passengers)
@@ -465,9 +487,9 @@ class Assistant(Agent):
             "class": userdata.flight_class,
             "trip_type": userdata.trip_type,
         }
-        res = json_response("success", 4,
-                             f"Total: {total:.3f} {userdata.selected_flight['currency']}\n\nConfirm your flight?",
-                             {"payment_summary": userdata.payment_summary})
+        res = json_response("success", 5,
+                            f"Total: {total:.3f} {userdata.selected_flight['currency']}\n\nConfirm your flight?",
+                            {"payment_summary": userdata.payment_summary})
         await self._publish(res)
         return res
 
@@ -509,10 +531,30 @@ class Assistant(Agent):
 
         result = supabase.table("bookings").insert(booking_data).execute()
         booking_id = result.data[0].get("booking_id", "FL123") if result.data else "TEMP"
-
-        res = json_response("success", 6,
-                            f"Flight booked!\nBooking ID: {booking_id}\nHave a great trip to {userdata.to_city}!",
-                            {"booking_id": booking_id, "booking": booking_data})
+        booking_id = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
+        res = json_response(status="success", action=6,
+                            message=f"Flight booked!\nBooking ID: {booking_id}\nHave a great trip to {userdata.to_city}!",
+                            data={
+                                "booking_id": booking_id,
+                                "booking_type": "flight",
+                                "user_id": str(uuid.uuid4()),
+                                "item_id": flight["id"],
+                                "booking_details": json.dumps({
+                                    "from": userdata.from_city,
+                                    "to": userdata.to_city,
+                                    "date": userdata.departure_date,
+                                    "return_date": userdata.return_date,
+                                    "passengers": userdata.passengers,
+                                    "class": userdata.flight_class,
+                                    "flight": flight
+                                }),
+                                "payment_status": "confirmed",
+                                "total_price": total_price,
+                                "currency": flight["currency"],
+                                "start_date": "",
+                                "end_date": "",
+                                "booking_date": datetime.now().isoformat()
+                            })
         await self._publish(res)
         await self.update_chat_ctx(ChatContext())
         return res
@@ -715,11 +757,26 @@ class Assistant(Agent):
             return json_response("error", 13, "Failed to place order.")
 
         order_id = result.data[0].get("booking_id", "TEMP123")
-
+        order_id = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
         res = json_response(
             "success", 13,
             f"Order #{order_id} confirmed!\nEstimated delivery: 30–45 minutes",
-            {"orderId": order_id, "status": "confirmed", "order": order_data}
+            {"orderId": order_id, "status": "confirmed", "order": {
+                "order_id": order_id,
+                "booking_type": "food",
+                "user_id": str(uuid.uuid4()),
+                "item_id": userdata.selected_restaurant["id"],
+                "booking_details": json.dumps({
+                    "restaurant": userdata.selected_restaurant,
+                    "cart": userdata.cart,
+                    "delivery_address": userdata.delivery_address or "Address not collected",
+                    "payment_summary": summary
+                }),
+                "payment_status": "Confirmed",
+                "total_price": summary["total"],
+                "currency": "KWD",
+                "booking_date": datetime.now().isoformat()
+            }}
         )
         userdata.food_order_confirmed = True
         await self._publish(res)
