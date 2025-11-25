@@ -22,7 +22,7 @@ async def entrypoint(ctx: agents.JobContext):
     session = AgentSession(
         stt=deepgram.STT(model="nova-3"),
         llm=openai.LLM(model=os.getenv("LLM_CHOICE", "gpt-4.1-mini")),
-        tts=deepgram.TTS(),
+        tts=deepgram.TTS(model="aura-2-odysseus-en"),
         vad=silero.VAD.load(),
     )
 
