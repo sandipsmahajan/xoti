@@ -515,47 +515,27 @@ class Assistant(Agent):
             "booking_type": "flight",
             "user_id": str(uuid.uuid4()),
             "item_id": flight["id"],
-            "booking_details": {
-                "from": userdata.from_city,
-                "to": userdata.to_city,
-                "date": userdata.departure_date,
+            "booking_details": json.dumps({
+                "trip_type": userdata.trip_type,
+                "departure_date": userdata.departure_date,
                 "return_date": userdata.return_date,
                 "passengers": userdata.passengers,
                 "class": userdata.flight_class,
                 "flight": flight
-            },
-            "payment_status": "confirmed",
+            }),
+            "payment_status": "Confirmed",
             "total_price": total_price,
             "currency": flight["currency"],
-            "booking_date": datetime.now().isoformat()
+            "booking_date": datetime.now().isoformat(),
+            "start_date": userdata.departure_date,
+            "end_date": userdata.return_date if userdata.trip_type == "round trip" else None
         }
 
         result = supabase.table("bookings").insert(booking_data).execute()
         booking_id = result.data[0].get("booking_id", "FL123") if result.data else "TEMP"
-        booking_id = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
         res = json_response(status="success", action=6,
                             message=f"Flight booked!\nBooking ID: {booking_id}\nHave a great trip to {userdata.to_city}!",
-                            data={
-                                "booking_id": booking_id,
-                                "booking_type": "flight",
-                                "user_id": str(uuid.uuid4()),
-                                "item_id": flight["id"],
-                                "booking_details": json.dumps({
-                                    "from": userdata.from_city,
-                                    "to": userdata.to_city,
-                                    "date": userdata.departure_date,
-                                    "return_date": userdata.return_date,
-                                    "passengers": userdata.passengers,
-                                    "class": userdata.flight_class,
-                                    "flight": flight
-                                }),
-                                "payment_status": "confirmed",
-                                "total_price": total_price,
-                                "currency": flight["currency"],
-                                "start_date": "",
-                                "end_date": "",
-                                "booking_date": datetime.now().isoformat()
-                            })
+                            data=result.data[0])
         await self._publish(res)
         await self.update_chat_ctx(ChatContext())
         return res
@@ -576,6 +556,7 @@ class Assistant(Agent):
 
         userdata.available_restaurants = restaurants
         userdata.selected_restaurant = None
+        userdata.payment_method = None
         userdata.menu_items = None
         userdata.cart = []
 
@@ -741,12 +722,12 @@ class Assistant(Agent):
             "booking_type": "food",
             "user_id": str(uuid.uuid4()),
             "item_id": userdata.selected_restaurant["id"],
-            "booking_details": {
+            "booking_details": json.dumps({
                 "restaurant": userdata.selected_restaurant,
                 "cart": userdata.cart,
                 "delivery_address": userdata.delivery_address or "Address not collected",
                 "payment_summary": summary
-            },
+            }),
             "payment_status": "Confirmed",
             "total_price": summary["total"],
             "currency": "KWD",
@@ -758,26 +739,10 @@ class Assistant(Agent):
             return json_response("error", 13, "Failed to place order.")
 
         order_id = result.data[0].get("booking_id", "TEMP123")
-        order_id = ''.join(random.choices(string.ascii_letters + string.digits, k=10))
         res = json_response(
             "success", 13,
             f"Order #{order_id} confirmed!\nEstimated delivery: 30–45 minutes",
-            {"orderId": order_id, "status": "confirmed", "order": {
-                "order_id": order_id,
-                "booking_type": "food",
-                "user_id": str(uuid.uuid4()),
-                "item_id": userdata.selected_restaurant["id"],
-                "booking_details": json.dumps({
-                    "restaurant": userdata.selected_restaurant,
-                    "cart": userdata.cart,
-                    "delivery_address": userdata.delivery_address or "Address not collected",
-                    "payment_summary": summary
-                }),
-                "payment_status": "Confirmed",
-                "total_price": summary["total"],
-                "currency": "KWD",
-                "booking_date": datetime.now().isoformat()
-            }}
+            result.data[0]
         )
         userdata.food_order_confirmed = True
         await self._publish(res)
