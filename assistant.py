@@ -744,7 +744,7 @@ class Assistant(Agent):
             "estimatedDeliveryMinutes": delivery_mins,
             "items": userdata.cart,
             "payment_status": "Confirmed",
-            "totalPrice": summary["total"],
+            "totalPrice": round(summary["total"], 3)
         }
 
         result = supabase.table("bookings").insert(order_data).execute()
