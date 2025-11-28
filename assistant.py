@@ -609,7 +609,7 @@ class Assistant(Agent):
         res = json_response(
             "success", 9,
             msg,
-            {"restaurant": restaurant, "items": menu})
+            {"items": menu})
         await self._publish(res)
         return res
 
@@ -673,7 +673,7 @@ class Assistant(Agent):
             "success", 10,
             f"Added {quantity} × {item['name']}\n"
             f"Cart: {total_items} item(s) → {subtotal:.3f} KWD",
-            {"cartItems": userdata.cart, "subtotal": round(subtotal, 3)}
+            {"cartItems": userdata.cart}
         )
         await self._publish(res)
         return res
@@ -699,7 +699,7 @@ class Assistant(Agent):
             "subtotal": round(subtotal, 3),
             "deliveryFee": delivery_fee,
             "total": round(total, 3),
-            "discount": subtotal * 0.05,
+            "discount": round(subtotal * 0.05, 3),
             "currency": "KWD",
             "cart": userdata.cart,
             "paymentMethod": userdata.payment_method,
@@ -708,7 +708,7 @@ class Assistant(Agent):
         userdata.food_payment_summary = summary
 
         msg = f"Subtotal: {subtotal:.3f} KWD + Delivery 0.750 KWD = Total {total:.3f} KWD\n\nConfirm your order?"
-        res = json_response("success", 12, msg, summary)
+        res = json_response("success", 12, msg, {"paymentSummary": summary})
         await self._publish(res)
         return res
 
@@ -737,6 +737,16 @@ class Assistant(Agent):
             "booking_date": datetime.now().isoformat()
         }
 
+        delivery_mins = random.choice(range(30, 60, 5))
+        order = {
+            "orderId": random.randint(100, 1000),
+            "status":"Confirmed",
+            "estimatedDeliveryMinutes": delivery_mins,
+            "items": userdata.cart,
+            "payment_status": "Confirmed",
+            "totalPrice": summary["total"],
+        }
+
         result = supabase.table("bookings").insert(order_data).execute()
         if not result.data:
             return json_response("error", 13, "Failed to place order.")
@@ -744,8 +754,8 @@ class Assistant(Agent):
         order_id = result.data[0].get("booking_id", "TEMP123")
         res = json_response(
             "success", 13,
-            f"Order #{order_id} confirmed!\nEstimated delivery: 30–45 minutes",
-            result.data[0]
+            f"Order #{order_id} confirmed!\nEstimated delivery: {delivery_mins} minutes",
+            {"order": order}
         )
         userdata.food_order_confirmed = True
         await self._publish(res)
