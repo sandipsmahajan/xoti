@@ -656,7 +656,7 @@ class Assistant(Agent):
 
         existing = next((c for c in userdata.cart if c["item"]["id"] == item["id"]), None)
         if existing:
-            existing["quantity"] += quantity
+            existing["quantity"] = quantity
             existing["total"] = existing["item"]["price"] * existing["quantity"]
         else:
             userdata.cart.append({
