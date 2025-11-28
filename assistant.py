@@ -231,7 +231,7 @@ class Assistant(Agent):
             payload=json.dumps(payload).encode("utf-8"),
             reliable=True
         )
-        print(payload)
+        print(json.dumps(payload))
 
     async def fetch_city_code(self, city_name: str, field: str):
         if not city_name:
@@ -663,7 +663,8 @@ class Assistant(Agent):
                 "id": str(uuid.uuid4()),
                 "item": item,
                 "quantity": quantity,
-                "total": item["price"] * quantity
+                "total": item["price"] * quantity,
+                "currency": item["currency"]
             })
 
         subtotal = sum(c["total"] for c in userdata.cart)
@@ -698,6 +699,7 @@ class Assistant(Agent):
             "subtotal": round(subtotal, 3),
             "deliveryFee": delivery_fee,
             "total": round(total, 3),
+            "discount": subtotal * 0.05,
             "currency": "KWD",
             "cart": userdata.cart,
             "paymentMethod": userdata.payment_method,
@@ -706,7 +708,7 @@ class Assistant(Agent):
         userdata.food_payment_summary = summary
 
         msg = f"Subtotal: {subtotal:.3f} KWD + Delivery 0.750 KWD = Total {total:.3f} KWD\n\nConfirm your order?"
-        res = json_response("success", 12, msg, {"paymentSummary": summary})
+        res = json_response("success", 12, msg, summary)
         await self._publish(res)
         return res
 
@@ -726,7 +728,8 @@ class Assistant(Agent):
                 "restaurant": userdata.selected_restaurant,
                 "cart": userdata.cart,
                 "delivery_address": userdata.delivery_address or "Address not collected",
-                "payment_summary": summary
+                "payment_summary": summary,
+                "estimated_delivery": "30–45 minutes"
             }),
             "payment_status": "Confirmed",
             "total_price": summary["total"],
