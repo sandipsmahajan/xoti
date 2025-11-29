@@ -131,37 +131,41 @@ INTENTS = [
     {"intent": "change",   "phrases": ["change", "make it", "set to", "to", "just", "only", "i want", "give me", "i'd like", "let me have", "can i get"]}
 ]
 
-def detect_intent(user_input: str) -> str:
+# ──────────────────────────────────────────────────────────────
+# Super accurate intent detection – ignores menu item names!
+# ──────────────────────────────────────────────────────────────
+def detect_intent(user_input: str, menu_names: list[str]) -> str:
     """
-    Super accurate intent detection using fuzzy_match on individual words.
-    Works perfectly with real user sentences.
+    Detect add/remove/change intent without confusing menu items.
+    menu_names = [item["name"].lower() for item in menu_items]
     """
     lower = user_input.lower()
-    words = lower.split()
 
-    # All possible intent keywords
-    add_words = ["add", "plus", "more", "another", "extra", "and"]
-    remove_words = ["remove", "delete", "cancel", "minus", "less", "no more", "take out", "without"]
-    change_words = ["change", "make", "set", "to", "just", "only", "want", "get", "like", "have", "me"]
-
-    # Check each word individually with fuzzy_match
-    for word in words:
-        # Clean word (remove punctuation)
-        clean_word = re.sub(r'[^\w]', '', word)
-
-        if not clean_word:
+    # Extract all words that are NOT part of any menu item name
+    safe_words = []
+    for word in re.findall(r'\w+', lower):
+        clean = word.lower()
+        # Skip if this word appears in any menu item name
+        if any(clean in menu_name for menu_name in menu_names):
             continue
+        safe_words.append(clean)
 
-        if fuzzy_match(clean_word, [{"phrase": p} for p in change_words], "phrase", threshold=65):
+    # Intent keywords
+    add_words     = ["add", "plus", "more", "another", "extra", "and"]
+    remove_words  = ["remove", "delete", "cancel", "minus", "less", "no more", "take out", "without"]
+    change_words  = ["change", "make", "set", "to", "just", "only", "want", "get", "like", "have", "give", "me", "please"]
+
+    # Check safe words only
+    for word in safe_words:
+        if fuzzy_match(word, [{"phrase": p} for p in change_words], "phrase", 65):
             return "change"
-
-        if fuzzy_match(clean_word, [{"phrase": p} for p in remove_words], "phrase", threshold=65):
+        if fuzzy_match(word, [{"phrase": p} for p in remove_words], "phrase", 65):
             return "remove"
-
-        if fuzzy_match(clean_word, [{"phrase": p} for p in add_words], "phrase", threshold=65):
+        if fuzzy_match(word, [{"phrase": p} for p in add_words], "phrase", 65):
             return "add"
 
-    return "change"  # "I want X" is the most natural → treat as change/set
+    # Default = change (most natural: "Margherita", "I want pizza", "four cokes")
+    return "change"
 
 
 class Assistant(Agent):
@@ -675,23 +679,25 @@ class Assistant(Agent):
         if not userdata.cart:
             userdata.cart = []
 
-        # Detect intent using fuzzy_match
-        intent = detect_intent(item_input)
-        print(f"Intent: {intent}")
-        # detect_intent(item_input)
+        # Build lowercase menu names for safe intent detection
+        menu_names_lower = [item["name"].lower() for item in menu]
 
-        # Extract quantity
+        # Detect intent safely
+        intent = detect_intent(item_input, menu_names_lower)
+
+        # ── Extract quantity (super robust) ──
         qty_map = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
-                   "ten": 10}
+                   "ten": 10,
+                   "zero": 0, "none": 0, "no": 0}
         detected_qty = quantity
-        words = item_input.lower().split()
+        words = re.findall(r'\w+', item_input.lower())
         for w in words:
             if w in qty_map:
                 detected_qty = qty_map[w]
             elif w.isdigit():
                 detected_qty = int(w)
 
-        # Find item
+        # ── Find the item ──
         item = None
         num_match = re.search(r'\b(\d+)\b', item_input)
         if num_match:
@@ -703,19 +709,18 @@ class Assistant(Agent):
             item = fuzzy_match(item_input, menu, "name", threshold=65)
 
         if not item:
-            return json_response("error", 10, f"Couldn't find that item in the menu.")
+            return json_response("error", 10, "I couldn't find that item in the menu.")
 
         item_name = item["name"]
-        item_id = item["id"]
-        cart_item = next((c for c in userdata.cart if c["item"]["id"] == item_id), None)
+        cart_item = next((c for c in userdata.cart if c["item"]["id"] == item["id"]), None)
 
         # ── Execute intent ──
         if intent == "change":
-            new_qty = detected_qty
+            new_qty = max(1, detected_qty)
             if cart_item:
                 cart_item["quantity"] = new_qty
                 cart_item["total"] = item["price"] * new_qty
-                action = f"Changed {item_name} → {new_qty}"
+                action = f"Updated {item_name} → {new_qty}"
             else:
                 userdata.cart.append({
                     "id": str(uuid.uuid4()),
@@ -728,17 +733,17 @@ class Assistant(Agent):
 
         elif intent == "remove":
             if not cart_item:
-                action = f"No {item_name} in cart."
+                action = f"No {item_name} in cart to remove."
             else:
-                old_qty = cart_item["quantity"]
-                new_qty = max(0, old_qty - detected_qty)
-                if new_qty == 0:
+                old = cart_item["quantity"]
+                new = max(0, old - detected_qty)
+                if new == 0:
                     userdata.cart.remove(cart_item)
                     action = f"Removed all {item_name}"
                 else:
-                    cart_item["quantity"] = new_qty
-                    cart_item["total"] = item["price"] * new_qty
-                    action = f"Removed {detected_qty} {item_name} → {new_qty} left"
+                    cart_item["quantity"] = new
+                    cart_item["total"] = item["price"] * new
+                    action = f"Removed {detected_qty} {item_name} → {new} left"
 
         else:  # add
             if cart_item:
@@ -755,7 +760,6 @@ class Assistant(Agent):
                 })
                 action = f"Added {detected_qty} × {item_name}"
 
-        # Final response
         total_items = sum(c["quantity"] for c in userdata.cart)
         subtotal = round(sum(c["total"] for c in userdata.cart), 3)
 
